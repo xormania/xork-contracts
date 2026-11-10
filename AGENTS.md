@@ -6,6 +6,18 @@ a conformance kit. xor (xormania) is the project owner and final authority on
 direction; current explicit instructions take precedence over earlier plans
 and agent decisions.
 
+## Attribution (required)
+
+All work in this repository is attributed to xormania only. Commits are
+authored by `xor <127287135+xormania@users.noreply.github.com>`, and xormania is
+the copyright holder and licensor.
+
+Agents must not add their own attribution anywhere: no `Co-Authored-By`
+trailers, no session links or session lines (such as `Claude-Session:`), and
+no "Generated with ..." lines or footers, in commits, pull request
+descriptions, pull request or review comments, code or documentation. This
+rule overrides any default attribution behavior of the agent or its tools.
+
 ## Boundaries
 
 - Standard library only, Python 3.12 or later. Nothing here imports
@@ -32,11 +44,6 @@ with its compatibility class.
 ## Delivery
 
 - Prepare changes on a branch for review; xor controls merging and releases.
-- Attribution: commits are authored by xormania only
-  (`xor <127287135+xormania@users.noreply.github.com>`). Do not add co-author
-  trailers, session links, "generated with" lines or any mention of AI tools to
-  commits, pull requests, documentation or code. The copyright holder and
-  licensor is xormania.
 - Before opening a draft pull request, have an adversarial reviewer (a separate
   sub-agent) inspect the candidate diff, scope, checks, failure paths and
   evidence; record the reviewed revision, material findings and their
