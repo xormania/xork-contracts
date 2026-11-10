@@ -281,17 +281,16 @@ class FakeVersionControl:
         """The innermost declared worktree containing ``path``, as git reports it.
 
         A linked worktree inside the main one, or a nested repository, is more
-        specific than the tree around it. A path inside ``.git`` is in no
-        worktree. When a declared root exists on disk, the path must too, or
-        its parent directory, as for the git adapter; purely declared roots
-        (paths that do not exist) answer for any path below them.
+        specific than the tree around it. When a declared root exists on disk,
+        the path must too, or its parent directory, as for the git adapter;
+        purely declared roots (paths that do not exist) answer for any path
+        below them. A path inside ``.git`` belongs to the repository but to no
+        worktree (``metadata`` reports which).
         """
         found = None
         for name, repository in self.repositories.items():
             for index, root in enumerate(repository["worktrees"]):
                 inside = path == root or path.startswith(root.rstrip("/") + "/")
-                if inside and ".git" in Path(path[len(root):]).parts:
-                    inside = False
                 if inside and os.path.isdir(root):
                     candidate = Path(path)
                     inside = candidate.is_dir() or candidate.parent.is_dir()
@@ -303,7 +302,9 @@ class FakeVersionControl:
 
     def worktree(self, path: str) -> WorktreeLocation | None:
         found = self._find(path)
-        return None if found is None else found[1]
+        if found is None or ".git" in Path(path[len(found[1].root):]).parts:
+            return None
+        return found[1]
 
     def root_commits(self, path: str) -> frozenset[str]:
         found = self._find(path)

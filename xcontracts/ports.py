@@ -347,11 +347,13 @@ class VersionControl(Protocol):
     """Local version-control queries and the few operations the operator layer performs.
 
     The queries take a ``path`` that is an existing directory, or a file (or a
-    not yet existing entry) whose parent directory exists; they answer for the
-    innermost working tree containing it. Any other path (one whose parent
-    does not exist either), and any path inside a repository's metadata
-    directory (``.git``), is outside every working tree: ``worktree``,
-    ``remote_url`` and ``revision`` return ``None`` and ``root_commits`` is empty.
+    not yet existing entry) whose parent directory exists, and answer for the
+    innermost repository containing it. For any other path (one whose parent
+    does not exist either) ``worktree``, ``remote_url`` and ``revision`` return
+    ``None`` and ``root_commits`` is empty. A path inside a repository's
+    metadata directory (``.git``) is in no working tree (``worktree`` is
+    ``None``), but the repository queries (``root_commits``, ``remote_url``,
+    ``revision``) still answer for that repository, as git does.
     """
 
     def worktree(self, path: str) -> WorktreeLocation | None:

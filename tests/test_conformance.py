@@ -99,17 +99,20 @@ def test_fake_version_control_resolves_the_innermost_worktree():
 
 
 def test_fake_version_control_follows_the_git_rules_for_real_paths(tmp_path):
-    """Backed by real directories, the fake answers like the git adapter: files via their parent,
-    nothing for a path whose parent is missing or for ``.git``."""
+    """Backed by real directories, the fake answers like the git adapter: files via their parent, nothing
+    for a path whose parent is missing, and inside ``.git`` the repository but no worktree."""
     repository = tmp_path / "repo"
     (repository / ".git").mkdir(parents=True)
     (repository / "src").mkdir()
     (repository / "src" / "file.py").write_text("")
     vcs = fakes.FakeVersionControl({"repositories": {"r": {"worktrees": [str(repository)], "roots": ["abc"],
-                                                           "head": "abc"}}})
+                                                           "head": "abc", "remotes": {"origin": "url"}}}})
     for inside in (repository / "src" / "file.py", repository / "src" / "new.py", repository / "src"):
         assert vcs.worktree(str(inside)).root == str(repository) and vcs.revision(str(inside)) == "abc"
-        assert vcs.root_commits(str(inside)) == frozenset({"abc"})
-    for outside in (repository / "missing" / "deeper" / "x", repository / ".git", repository / ".git" / "HEAD"):
-        assert vcs.worktree(str(outside)) is None and vcs.revision(str(outside)) is None
-        assert vcs.root_commits(str(outside)) == frozenset() and vcs.remote_url(str(outside)) is None
+        assert vcs.root_commits(str(inside)) == frozenset({"abc"}) and vcs.remote_url(str(inside)) == "url"
+    missing = repository / "missing" / "deeper" / "x"
+    assert vcs.worktree(str(missing)) is None and vcs.revision(str(missing)) is None
+    assert vcs.root_commits(str(missing)) == frozenset() and vcs.remote_url(str(missing)) is None
+    for metadata in (repository / ".git", repository / ".git" / "HEAD"):
+        assert vcs.worktree(str(metadata)) is None
+        assert vcs.revision(str(metadata)) == "abc" and vcs.root_commits(str(metadata)) == frozenset({"abc"})
