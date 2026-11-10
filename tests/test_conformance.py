@@ -22,6 +22,21 @@ def test_run_reports_every_state_store_check_without_pytest():
 
 def test_memory_companion_conforms():
     operator.companion_records(fakes.MemoryCompanion())
+    operator.companion_scopes_are_isolated(fakes.MemoryCompanion())
+
+
+def test_memory_companion_refuses_a_kind_in_the_other_scope():
+    companion = fakes.MemoryCompanion()
+    companion.records("alpha").write("archive", "a", b"x")
+    for call in (lambda: companion.records(None).read("archive", "a"),
+                 lambda: companion.records(None).keys("archive"),
+                 lambda: companion.records(None).write("archive", "a", b"y")):
+        try:
+            call()
+        except Exception as error:  # noqa: BLE001
+            assert error.code == "invalid_arguments"
+        else:
+            raise AssertionError("cross-scope use accepted")
 
 
 def test_fake_version_control_conforms():
@@ -81,3 +96,20 @@ def test_fake_version_control_resolves_the_innermost_worktree():
     assert vcs.root_commits("/repo/vendor/lib/x.py") == frozenset({"nested-root"})
     assert vcs.remote_url("/repo/vendor/lib") == "nested-url" and vcs.revision("/repo/vendor/lib") == "nested-head"
     assert vcs.revision("/repo/linked") == "outer-head" and vcs.root_commits("/repo") == frozenset({"outer-root"})
+
+
+def test_fake_version_control_follows_the_git_rules_for_real_paths(tmp_path):
+    """Backed by real directories, the fake answers like the git adapter: files via their parent,
+    nothing for a path whose parent is missing or for ``.git``."""
+    repository = tmp_path / "repo"
+    (repository / ".git").mkdir(parents=True)
+    (repository / "src").mkdir()
+    (repository / "src" / "file.py").write_text("")
+    vcs = fakes.FakeVersionControl({"repositories": {"r": {"worktrees": [str(repository)], "roots": ["abc"],
+                                                           "head": "abc"}}})
+    for inside in (repository / "src" / "file.py", repository / "src" / "new.py", repository / "src"):
+        assert vcs.worktree(str(inside)).root == str(repository) and vcs.revision(str(inside)) == "abc"
+        assert vcs.root_commits(str(inside)) == frozenset({"abc"})
+    for outside in (repository / "missing" / "deeper" / "x", repository / ".git", repository / ".git" / "HEAD"):
+        assert vcs.worktree(str(outside)) is None and vcs.revision(str(outside)) is None
+        assert vcs.root_commits(str(outside)) == frozenset() and vcs.remote_url(str(outside)) is None

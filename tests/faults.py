@@ -398,3 +398,50 @@ class LeakyRevisionVersionControl(fakes.FakeVersionControl):
 
     def revision(self, path):
         return super().revision(path) or "abc"
+
+
+class _PathRecords:
+    def __init__(self, store, project):
+        self.store, self.project = store, project
+
+    def _path(self, key):
+        return f"{self.project}/{fakes._key(key)}" if self.project is not None else fakes._key(key)
+
+    def keys(self, kind, *, recursive=False):
+        prefix = "" if self.project is None else self.project + "/"
+        found = [path[len(prefix):] for (stored, path) in self.store if stored == kind and path.startswith(prefix)]
+        return sorted(key for key in found if recursive or "/" not in key)
+
+    def read(self, kind, key):
+        return self.store.get((fakes._name(kind, "kind"), self._path(key)))
+
+    def write(self, kind, key, data, *, create_only=False):
+        path = self._path(key)
+        if not isinstance(data, bytes):
+            raise OrchestrationError("bytes only", "invalid_arguments")
+        if any(stored == kind and (other.startswith(path + "/") or path.startswith(other + "/"))
+               for stored, other in self.store):
+            raise OrchestrationError("prefix", "invalid_arguments")
+        if create_only and (kind, path) in self.store:
+            return False
+        self.store[(fakes._name(kind, "kind"), path)] = data
+        return True
+
+
+class MixedScopeCompanion(fakes.MemoryCompanion):
+    """Stores project records at ``<project>/<key>`` beside shared ones at ``<key>``, with no scope check."""
+
+    def records(self, project):
+        return _PathRecords(self.store, None if project is None else fakes._name(project, "project"))
+
+
+class TextAcceptingCompanion(fakes.MemoryCompanion):
+    """Stores text as well as bytes."""
+
+    def records(self, project):
+        records = super().records(project)
+        original = records.write
+        records.write = lambda kind, key, data, *, create_only=False: original(
+            kind, key, data.encode() if isinstance(data, str) else bytes(data) if isinstance(data, list) else data,
+            create_only=create_only)
+        return records

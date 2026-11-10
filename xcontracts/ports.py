@@ -344,7 +344,15 @@ class WorktreeLocation:
 
 @runtime_checkable
 class VersionControl(Protocol):
-    """Local version-control queries and the few operations the operator layer performs."""
+    """Local version-control queries and the few operations the operator layer performs.
+
+    The queries take a ``path`` that is an existing directory, or a file (or a
+    not yet existing entry) whose parent directory exists; they answer for the
+    innermost working tree containing it. Any other path (one whose parent
+    does not exist either), and any path inside a repository's metadata
+    directory (``.git``), is outside every working tree: ``worktree``,
+    ``remote_url`` and ``revision`` return ``None`` and ``root_commits`` is empty.
+    """
 
     def worktree(self, path: str) -> WorktreeLocation | None:
         """The innermost working tree containing ``path``, or ``None`` outside any repository.
@@ -355,14 +363,14 @@ class VersionControl(Protocol):
         ...
 
     def root_commits(self, path: str) -> frozenset[str]:
-        """The history roots of the repository at ``path``; empty without history.
+        """The history roots of the repository containing ``path``; empty without history or outside one.
 
         Two repositories that share a root are clones of one project.
         """
         ...
 
     def remote_url(self, path: str, name: str = "origin") -> str | None:
-        """The URL of remote ``name`` of the repository at ``path``, or ``None``."""
+        """The URL of remote ``name`` of the repository containing ``path``, or ``None``."""
         ...
 
     def initialize(self, path: str) -> None:
@@ -393,6 +401,15 @@ class CompanionRecords(Protocol):
     be the prefix of another key, and a prefix is not itself a record. Any
     refused kind, key or project name (including one with a trailing newline)
     raises an ``OrchestrationError`` coded ``invalid_arguments``.
+
+    A kind is used either project-scoped (``records(project)``) or
+    project-independent (``records(None)``), never both. Records of one scope
+    are never visible in another, however keys and project names look; an
+    adapter whose storage could mix them (for example
+    ``<kind>/<project>/<key>`` beside ``<kind>/<key>``) refuses, with
+    ``invalid_arguments``, any use of a kind in the other scope from the one it
+    already holds. ``write`` takes ``bytes`` only; anything else is refused
+    with ``invalid_arguments``.
     """
 
     project: str | None

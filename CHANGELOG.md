@@ -29,7 +29,9 @@ The date is set when the release is tagged.
   Companion record keys may be `/`-separated paths of names
   (`CompanionRecords.keys(kind, recursive=...)`), and `Companion.revision()` and
   `VersionControl.revision(path)` report committed revisions, as in
-  Xorchestrate's master.
+  Xorchestrate's master. A companion kind is used either project-scoped or
+  project-independent, never both, and `VersionControl` states which paths it
+  answers for (files via their parent directory; nothing inside `.git`).
 - The values and errors they exchange, moved from `xorchestrate.model`: `JSON`,
   `Record`, `Capability`, `Assessment`, `Verdict`, `OrchestrationError` and
   `Conflict`.
@@ -38,7 +40,8 @@ The date is set when the release is tagged.
   `split_reference`.
 - The conformance kit (`xcontracts.testing`): `StateStore` checks (serialized
   and optimistic stores alike), operator port checks (path keys, flat and
-  recursive listing, prefix conflicts, revisions), factory construction
+  recursive listing, prefix conflicts, scope isolation, bytes-only records,
+  revisions), factory construction
   checks and reference fakes. Every check has a fault witness.
 
 ### Compatibility

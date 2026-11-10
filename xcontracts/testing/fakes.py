@@ -11,10 +11,12 @@ They are test doubles: process-local, unoptimized and with no durability.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from ..model import JSON, Conflict, OrchestrationError, Record
 from ..ports import HostingVisibility, VersionControl, WorktreeLocation
@@ -180,20 +182,36 @@ def _key(value: object) -> str:
 
 
 class _MemoryRecords:
-    def __init__(self, store: dict, project: str | None):
+    def __init__(self, store: dict, project: str | None, scopes: dict | None = None):
         self.store = store
         self.project = None if project is None else _name(project, "project")
+        self.scopes = {} if scopes is None else scopes
+
+    def _scope(self, kind: str, *, claim: bool = False) -> None:
+        """A kind is used project-scoped or project-independent, never both; the first write decides."""
+        scope = "project-independent" if self.project is None else "project-scoped"
+        held = self.scopes.get(kind)
+        if held is not None and held != scope:
+            raise OrchestrationError(f"Companion record kind {kind} is {held}.", "invalid_arguments", {"kind": kind})
+        if claim:
+            self.scopes[kind] = scope
 
     def keys(self, kind: str, *, recursive: bool = False) -> list[str]:
         _name(kind, "kind")
+        self._scope(kind)
         return sorted(key for (project, stored, key) in self.store
                       if project == self.project and stored == kind and (recursive or "/" not in key))
 
     def read(self, kind: str, key: str) -> bytes | None:
-        return self.store.get((self.project, _name(kind, "kind"), _key(key)))
+        address = (self.project, _name(kind, "kind"), _key(key))
+        self._scope(kind)
+        return self.store.get(address)
 
     def write(self, kind: str, key: str, data: bytes, *, create_only: bool = False) -> bool:
         address = (self.project, _name(kind, "kind"), _key(key))
+        if not isinstance(data, bytes):
+            raise OrchestrationError("Companion records are bytes.", "invalid_arguments")
+        self._scope(kind, claim=True)
         # A record cannot also be the prefix of another key (a directory in a file-backed adapter).
         if any(stored[:2] == address[:2] and (stored[2].startswith(key + "/") or key.startswith(stored[2] + "/"))
                for stored in self.store):
@@ -220,6 +238,7 @@ class MemoryCompanion:
         self.remote_url = options.get("remote")
         self.revision_id = options.get("revision")
         self.store: dict = {}
+        self.scopes: dict = {}
         self.initialized = False
 
     def validate_location(self) -> str | None:
@@ -235,7 +254,7 @@ class MemoryCompanion:
         return [self.location]
 
     def records(self, project: str | None) -> _MemoryRecords:
-        return _MemoryRecords(self.store, project)
+        return _MemoryRecords(self.store, project, self.scopes)
 
     def remote(self) -> str | None:
         return self.remote_url
@@ -262,13 +281,21 @@ class FakeVersionControl:
         """The innermost declared worktree containing ``path``, as git reports it.
 
         A linked worktree inside the main one, or a nested repository, is more
-        specific than the tree around it.
+        specific than the tree around it. A path inside ``.git`` is in no
+        worktree. When a declared root exists on disk, the path must too, or
+        its parent directory, as for the git adapter; purely declared roots
+        (paths that do not exist) answer for any path below them.
         """
         found = None
         for name, repository in self.repositories.items():
             for index, root in enumerate(repository["worktrees"]):
-                if (path == root or path.startswith(root.rstrip("/") + "/")) and (
-                        found is None or len(root) > len(found[1].root)):
+                inside = path == root or path.startswith(root.rstrip("/") + "/")
+                if inside and ".git" in Path(path[len(root):]).parts:
+                    inside = False
+                if inside and os.path.isdir(root):
+                    candidate = Path(path)
+                    inside = candidate.is_dir() or candidate.parent.is_dir()
+                if inside and (found is None or len(root) > len(found[1].root)):
                     common = f"/fake/{name}/.git"
                     private = common if index == 0 else f"{common}/worktrees/{index}"
                     found = name, WorktreeLocation(root, private, common, repository.get("branch"))

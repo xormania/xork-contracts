@@ -54,7 +54,8 @@ def companion_records(companion: Companion) -> None:
     expect(alpha.write("overlay", "overlay.json", b'{"a": 1}') is True, "COMPANION_WRITE_REPORTS_WRITTEN")
     expect_equal(alpha.read("overlay", "overlay.json"), b'{"a": 1}', "COMPANION_READS_WHAT_WAS_WRITTEN")
     expect(beta.read("overlay", "overlay.json") is None, "COMPANION_PROJECTS_ARE_ISOLATED")
-    expect(shared.read("overlay", "overlay.json") is None, "COMPANION_PROJECT_RECORDS_ARE_NOT_SHARED_RECORDS")
+    expect(_absent_or_refused(lambda: shared.read("overlay", "overlay.json")),
+           "COMPANION_PROJECT_RECORDS_ARE_NOT_SHARED_RECORDS")
     expect(alpha.write("overlay", "overlay.json", b"kept", create_only=True) is False,
            "COMPANION_CREATE_ONLY_KEEPS_EXISTING")
     expect_equal(alpha.read("overlay", "overlay.json"), b'{"a": 1}', "COMPANION_CREATE_ONLY_KEEPS_EXISTING")
@@ -91,6 +92,9 @@ def companion_records(companion: Companion) -> None:
         _refused(lambda key=conflicting: alpha.write("telemetry", key, b"x"), conflicting,
                  "COMPANION_REFUSES_PREFIX_CONFLICT")
     expect_equal(alpha.keys("telemetry", recursive=True), sorted(tree), "COMPANION_REFUSES_PREFIX_CONFLICT")
+    _refused(lambda: alpha.write("overlay", "text.json", "not bytes"), "str data", "COMPANION_RECORDS_ARE_BYTES_ONLY")
+    _refused(lambda: alpha.write("overlay", "list.json", [1]), "list data", "COMPANION_RECORDS_ARE_BYTES_ONLY")
+    expect(alpha.read("overlay", "text.json") is None, "COMPANION_RECORDS_ARE_BYTES_ONLY")
     for name in INVALID_NAMES:
         _refused(lambda name=name: alpha.read(name, "key"), name)
         _refused(lambda name=name: alpha.write(name, "key", b"x"), name)
@@ -98,6 +102,57 @@ def companion_records(companion: Companion) -> None:
     for key in INVALID_KEYS:
         _refused(lambda key=key: alpha.read("kind", key), key, "COMPANION_REFUSES_INVALID_KEY")
         _refused(lambda key=key: alpha.write("kind", key, b"x"), key, "COMPANION_REFUSES_INVALID_KEY")
+
+
+def _absent_or_refused(call) -> bool:
+    """True when ``call`` finds nothing (``None`` or an empty list) or is refused with ``invalid_arguments``."""
+    try:
+        result = call()
+    except Exception as error:  # noqa: BLE001 - a refusal must carry the documented code
+        if getattr(error, "code", None) != "invalid_arguments":
+            raise ContractViolation("COMPANION_INVALID_NAME_CODE", f"refused with {type(error).__name__} {error}") from error
+        return True
+    return result is None or result == []
+
+
+@check()
+def companion_scopes_are_isolated(companion: Companion) -> None:
+    """Project-scoped and project-independent records never show through each other, whatever the keys look like.
+
+    A kind is used in one scope only; the other scope's use may be refused
+    (``invalid_arguments``) or isolated, but never sees or blocks the first
+    scope's records. ``companion`` must not exist yet; the check initializes it.
+    """
+    companion.initialize()
+    shared = companion.records(None)
+    # A project-independent tree whose first segment looks like a project name.
+    expect(shared.write("tools", "lib/helper.sh", b"shared") is True, "COMPANION_KEYS_MAY_BE_PATHS")
+    library = companion.records("lib")
+    expect(_absent_or_refused(lambda: library.read("tools", "helper.sh")), "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+    expect(_absent_or_refused(lambda: library.keys("tools", recursive=True)), "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+    expect(_absent_or_refused(lambda: library.keys("tools")), "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+    # Project-scoped trees are not project-independent records.
+    alpha, beta = companion.records("alpha"), companion.records("beta")
+    expect(alpha.write("archive", "inst/bundle/manifest.json", b"alpha") is True, "COMPANION_KEYS_MAY_BE_PATHS")
+    expect(_absent_or_refused(lambda: shared.keys("archive", recursive=True)), "COMPANION_PROJECT_RECORD_SEEN_AS_SHARED")
+    expect(_absent_or_refused(lambda: shared.keys("archive")), "COMPANION_PROJECT_RECORD_SEEN_AS_SHARED")
+    expect(_absent_or_refused(lambda: shared.read("archive", "alpha/inst/bundle/manifest.json")),
+           "COMPANION_PROJECT_RECORD_SEEN_AS_SHARED")
+    # A project-independent write cannot take or shadow a project's place.
+    try:
+        shared.write("archive", "beta", b"shared")
+    except Exception as error:  # noqa: BLE001 - refusing is allowed, with the documented code
+        if getattr(error, "code", None) != "invalid_arguments":
+            raise ContractViolation("COMPANION_INVALID_NAME_CODE", f"{type(error).__name__} {error}") from error
+    try:
+        written = beta.write("archive", "inst/bundle/manifest.json", b"beta")
+    except Exception as error:  # noqa: BLE001 - the project's own write must work
+        raise ContractViolation("COMPANION_SHARED_WRITE_BLOCKS_PROJECT", f"{type(error).__name__} {error}") from error
+    expect(written is True, "COMPANION_SHARED_WRITE_BLOCKS_PROJECT")
+    expect_equal(beta.read("archive", "inst/bundle/manifest.json"), b"beta", "COMPANION_SHARED_WRITE_BLOCKS_PROJECT")
+    expect_equal(alpha.read("archive", "inst/bundle/manifest.json"), b"alpha", "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect_equal(alpha.keys("archive", recursive=True), ["inst/bundle/manifest.json"], "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect_equal(shared.read("tools", "lib/helper.sh"), b"shared", "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
 
 
 @check()
@@ -140,4 +195,4 @@ def repository_hosting(hosting: RepositoryHosting, private_url: str, public_url:
                f"{url}: {report!r}")
 
 
-CHECKS = (companion_records, version_control, repository_hosting)
+CHECKS = (companion_records, companion_scopes_are_isolated, version_control, repository_hosting)

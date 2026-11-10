@@ -173,3 +173,16 @@ def test_version_control_revision_checks_detect_their_fault(vcs, code):
     with pytest.raises(ContractViolation) as caught:
         operator.version_control(vcs(options), "/w/repo", "/w/linked", "/w/elsewhere")
     assert caught.value.code == code
+
+
+def test_scope_check_detects_a_companion_that_mixes_scopes_by_path():
+    with pytest.raises(ContractViolation) as caught:
+        operator.companion_scopes_are_isolated(faults.MixedScopeCompanion())
+    assert caught.value.code == "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT"
+    operator.companion_scopes_are_isolated(fakes.MemoryCompanion())  # healthy control
+
+
+def test_companion_check_detects_non_bytes_records():
+    with pytest.raises(ContractViolation) as caught:
+        operator.companion_records(faults.TextAcceptingCompanion())
+    assert caught.value.code == "COMPANION_RECORDS_ARE_BYTES_ONLY"
