@@ -52,17 +52,23 @@ Options are not passed through untouched. In Xorchestrate:
   text. Operator settings in the user's home are not rendered, and
   ``build()`` called without the operator layer substitutes nothing.
 - For every ``providers`` and ``evaluators`` entry, referenced or built-in,
-  composition resolves ``options["cwd"]`` (default ``"."``) against the
-  project's data directory to identify the configuration, so a ``cwd`` that
-  is not a string is refused with ``configuration_error``. The factory still
-  receives ``cwd`` as written (or no ``cwd``); only built-in aliases receive
-  the resolved absolute path, and only built-in ``sqlite`` stores and the
-  built-in ``local`` telemetry get their paths resolved.
+  composition also resolves ``options["cwd"]`` (default ``"."``) against the
+  project's data directory, only to identify the configuration, so a ``cwd``
+  that is not a string is refused with ``configuration_error``. The factory
+  still receives ``cwd`` as written (or no ``cwd``).
+- Only built-in aliases receive resolved paths: built-in ``providers`` and
+  ``sessions`` get an absolute ``cwd`` (default the data directory), the
+  built-in ``sqlite`` store its ``path`` and the built-in ``local`` telemetry
+  its ``runtime_root``. Built-in evaluators receive ``cwd`` as written.
 
 So a factory that accepts paths should require absolute ones (``${data}``
-gives one) or document what they are relative to. A factory validates its own options and raises ``OrchestrationError`` (code
-``configuration_error`` or ``invalid_request``) with a public message for
-invalid ones; any other exception is reported without its text.
+gives one) or document what they are relative to.
+
+A factory validates its own options and raises ``OrchestrationError`` with a
+public message for invalid ones. Any code is passed on as is (Xorchestrate's
+built-in adapters mostly use ``invalid_configuration``; ``configuration_error``
+and ``invalid_request`` also occur). Any other exception is reported as
+``configuration_error`` without its text.
 
 Xorchestrate closes each project adapter that has ``close()`` when its runtime
 ends, in reverse construction order.
