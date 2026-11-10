@@ -25,7 +25,8 @@ def test_memory_companion_conforms():
 
 
 def test_fake_version_control_conforms():
-    vcs = fakes.FakeVersionControl({"repositories": {"repo": {"worktrees": ["/w/repo", "/w/linked"], "roots": ["abc"]}}})
+    vcs = fakes.FakeVersionControl({"repositories": {"repo": {"worktrees": ["/w/repo", "/w/linked"], "roots": ["abc"],
+                                                              "head": "abc"}}})
     operator.version_control(vcs, "/w/repo", "/w/linked", "/w/elsewhere")
 
 
@@ -41,7 +42,7 @@ def test_version_control_roots_compare_after_resolving_symlinks(tmp_path):
     (tmp_path / "alias").symlink_to(tmp_path / "real")
     real = str((tmp_path / "real").resolve())
     vcs = fakes.FakeVersionControl({"repositories": {"r": {"worktrees": [f"{real}/repo", f"{real}/linked"],
-                                                           "roots": ["abc"]}}})
+                                                           "roots": ["abc"], "head": "abc"}}})
 
     class Resolving(fakes.FakeVersionControl):
         def worktree(self, path):
@@ -49,5 +50,8 @@ def test_version_control_roots_compare_after_resolving_symlinks(tmp_path):
 
         def root_commits(self, path):
             return vcs.root_commits(os.path.realpath(path))
+
+        def revision(self, path):
+            return vcs.revision(os.path.realpath(path))
     alias = tmp_path / "alias"
     operator.version_control(Resolving(), alias / "repo", alias / "linked", tmp_path)

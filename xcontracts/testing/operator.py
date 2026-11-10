@@ -20,10 +20,14 @@ from ..ports import Companion, RepositoryHosting, VersionControl
 from ._core import ContractViolation, check, expect, expect_equal
 
 INVALID_NAMES = ("", ".hidden", "_private", "-dash", "../escape", "a/b", "spaced name", "key\n", "x" * 129)
-"""Kind, key and project names every companion must refuse with ``invalid_arguments``."""
+"""Kind and project names every companion must refuse with ``invalid_arguments``."""
+
+INVALID_KEYS = ("", ".hidden", ".git", "..", "../escape", "a/../b", "a//b", "/a", "a/", "a/.b", "a/.git/c",
+                "spaced name", "key\n", "a/b\n", "x" * 129)
+"""Keys every companion must refuse: keys are ``/``-separated names, so these are still invalid."""
 
 
-def _refused(call, name: str) -> None:
+def _refused(call, name: str, code: str = "COMPANION_REFUSES_INVALID_NAME") -> None:
     try:
         call()
     except Exception as error:  # noqa: BLE001 - any refusal with the right code satisfies the contract
@@ -31,7 +35,7 @@ def _refused(call, name: str) -> None:
             raise ContractViolation("COMPANION_INVALID_NAME_CODE",
                                     f"{name!r} refused with {type(error).__name__} {error}") from error
     else:
-        raise ContractViolation("COMPANION_REFUSES_INVALID_NAME", f"{name!r} was accepted")
+        raise ContractViolation(code, f"{name!r} was accepted")
 
 
 @check()
@@ -63,16 +67,46 @@ def companion_records(companion: Companion) -> None:
     expect(alpha.write("snapshot-archive", "bundle-1", b"\x00\x01") is True, "COMPANION_KINDS_ARE_OPEN")
     expect_equal(alpha.keys("snapshot-archive"), ["bundle-1"], "COMPANION_KINDS_ARE_OPEN")
     expect_equal(alpha.read("snapshot-archive", "bundle-1"), b"\x00\x01", "COMPANION_RECORDS_ARE_BYTES")
+    # Keys may be paths of names, so a capability can keep a tree of records.
+    tree = {"inst/bundle/manifest.json": b"{}", "inst/bundle/artifacts/sha256/ab/abcd": b"\x02",
+            "inst/other/manifest.json": b"[]"}
+    for key, data in tree.items():
+        try:
+            written = alpha.write("telemetry", key, data)
+        except Exception as error:  # noqa: BLE001 - a refused path key is the violation
+            raise ContractViolation("COMPANION_KEYS_MAY_BE_PATHS", f"{key!r}: {type(error).__name__} {error}") from error
+        expect(written is True, "COMPANION_KEYS_MAY_BE_PATHS", key)
+    expect_equal(alpha.keys("telemetry", recursive=True), sorted(tree), "COMPANION_RECURSIVE_KEYS_LIST_PATHS")
+    expect_equal(alpha.keys("telemetry"), [], "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES")
+    shared.write("launchers", "lib/helper.sh", b"#!/bin/sh\n")
+    expect_equal(shared.keys("launchers"), [], "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES")
+    expect_equal(shared.keys("launchers", recursive=True), ["lib/helper.sh"], "COMPANION_RECURSIVE_KEYS_LIST_PATHS")
+    shared.write("policies", "disabled/old.json", b"{}")
+    expect_equal(shared.keys("policies"), ["a.json", "b.json"], "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES")
+    expect_equal({key: alpha.read("telemetry", key) for key in tree}, tree, "COMPANION_KEYS_MAY_BE_PATHS")
+    expect_equal(beta.keys("telemetry", recursive=True), [], "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect(beta.read("telemetry", "inst/bundle/manifest.json") is None, "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect(alpha.read("telemetry", "inst/bundle") is None, "COMPANION_PREFIX_IS_NOT_A_RECORD")
+    for conflicting in ("inst/bundle/manifest.json/child", "inst/bundle"):
+        _refused(lambda key=conflicting: alpha.write("telemetry", key, b"x"), conflicting,
+                 "COMPANION_REFUSES_PREFIX_CONFLICT")
+    expect_equal(alpha.keys("telemetry", recursive=True), sorted(tree), "COMPANION_REFUSES_PREFIX_CONFLICT")
     for name in INVALID_NAMES:
         _refused(lambda name=name: alpha.read(name, "key"), name)
-        _refused(lambda name=name: alpha.write("kind", name, b"x"), name)
+        _refused(lambda name=name: alpha.write(name, "key", b"x"), name)
         _refused(lambda name=name: companion.records(name or "/"), name)
+    for key in INVALID_KEYS:
+        _refused(lambda key=key: alpha.read("kind", key), key, "COMPANION_REFUSES_INVALID_KEY")
+        _refused(lambda key=key: alpha.write("kind", key, b"x"), key, "COMPANION_REFUSES_INVALID_KEY")
 
 
 @check()
 def version_control(vcs: VersionControl, repository: str | PathLike, linked: str | PathLike,
                     unrelated_directory: str | PathLike) -> None:
-    """``repository`` and ``linked`` are two worktrees of one repository with history; ``unrelated_directory`` is in none."""
+    """``repository`` and ``linked`` are two worktrees of one repository with history; ``unrelated_directory`` is in none.
+
+    The repository's checked-out commit is reported by ``revision``.
+    """
     main, other = vcs.worktree(str(repository)), vcs.worktree(str(linked))
     expect(main is not None and other is not None, "VCS_FINDS_WORKTREES")
     expect_equal((os.path.realpath(main.root), os.path.realpath(other.root)),
@@ -83,6 +117,9 @@ def version_control(vcs: VersionControl, repository: str | PathLike, linked: str
     roots = vcs.root_commits(str(repository))
     expect(roots and roots == vcs.root_commits(str(linked)), "VCS_WORKTREES_SHARE_ROOT_COMMITS")
     expect_equal(vcs.root_commits(str(unrelated_directory)), frozenset(), "VCS_NO_ROOTS_OUTSIDE_REPOSITORY")
+    revision = vcs.revision(str(repository))
+    expect(isinstance(revision, str) and revision, "VCS_REVISION_OF_REPOSITORY_WITH_HISTORY", repr(revision))
+    expect(vcs.revision(str(unrelated_directory)) is None, "VCS_NO_REVISION_OUTSIDE_REPOSITORY")
 
 
 @check()

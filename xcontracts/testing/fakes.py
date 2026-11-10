@@ -173,20 +173,32 @@ def _name(value: object, what: str) -> str:
     return value
 
 
+def _key(value: object) -> str:
+    if not isinstance(value, str) or not all(NAME.fullmatch(part) for part in value.split("/")):
+        raise OrchestrationError("Invalid companion record key.", "invalid_arguments", {"key": value})
+    return value
+
+
 class _MemoryRecords:
     def __init__(self, store: dict, project: str | None):
         self.store = store
         self.project = None if project is None else _name(project, "project")
 
-    def keys(self, kind: str) -> list[str]:
+    def keys(self, kind: str, *, recursive: bool = False) -> list[str]:
         _name(kind, "kind")
-        return sorted(key for (project, stored, key) in self.store if project == self.project and stored == kind)
+        return sorted(key for (project, stored, key) in self.store
+                      if project == self.project and stored == kind and (recursive or "/" not in key))
 
     def read(self, kind: str, key: str) -> bytes | None:
-        return self.store.get((self.project, _name(kind, "kind"), _name(key, "key")))
+        return self.store.get((self.project, _name(kind, "kind"), _key(key)))
 
     def write(self, kind: str, key: str, data: bytes, *, create_only: bool = False) -> bool:
-        address = (self.project, _name(kind, "kind"), _name(key, "key"))
+        address = (self.project, _name(kind, "kind"), _key(key))
+        # A record cannot also be the prefix of another key (a directory in a file-backed adapter).
+        if any(stored[:2] == address[:2] and (stored[2].startswith(key + "/") or key.startswith(stored[2] + "/"))
+               for stored in self.store):
+            raise OrchestrationError("A companion record cannot be the prefix of another.", "invalid_arguments",
+                                     {"key": key})
         if create_only and address in self.store:
             return False
         self.store[address] = bytes(data)
@@ -197,7 +209,8 @@ class MemoryCompanion:
     """A ``Companion`` held in memory.
 
     Options: ``name`` (its location, default ``memory``), ``unsafe`` (a reason
-    its location check reports, default none) and ``remote`` (its published URL).
+    its location check reports, default none), ``remote`` (its published URL)
+    and ``revision`` (its committed revision, default none).
     """
 
     def __init__(self, options: JSON | None = None, *, version_control: VersionControl | None = None):
@@ -205,6 +218,7 @@ class MemoryCompanion:
         self.location = options.get("name", "memory")
         self.unsafe = options.get("unsafe")
         self.remote_url = options.get("remote")
+        self.revision_id = options.get("revision")
         self.store: dict = {}
         self.initialized = False
 
@@ -226,6 +240,9 @@ class MemoryCompanion:
     def remote(self) -> str | None:
         return self.remote_url
 
+    def revision(self) -> str | None:
+        return self.revision_id
+
 
 # -- VersionControl and RepositoryHosting ---------------------------------------------
 
@@ -234,7 +251,8 @@ class FakeVersionControl:
     """A ``VersionControl`` over declared repositories.
 
     Options: ``{"repositories": {name: {"worktrees": [root, ...], "roots": [...],
-    "branch": ..., "remotes": {name: url}}}}``. The first worktree is the main one.
+    "head": commit, "branch": ..., "remotes": {name: url}}}}``. The first
+    worktree is the main one; ``head`` is the checked-out revision.
     """
 
     def __init__(self, options: JSON | None = None):
@@ -260,6 +278,10 @@ class FakeVersionControl:
     def remote_url(self, path: str, name: str = "origin") -> str | None:
         found = self._find(path)
         return None if found is None else self.repositories[found[0]].get("remotes", {}).get(name)
+
+    def revision(self, path: str) -> str | None:
+        found = self._find(path)
+        return None if found is None else self.repositories[found[0]].get("head")
 
     def initialize(self, path: str) -> None:
         self.repositories[path] = {"worktrees": [path], "roots": []}

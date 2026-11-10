@@ -365,6 +365,10 @@ class VersionControl(Protocol):
         """Create an empty repository at ``path``."""
         ...
 
+    def revision(self, path: str) -> str | None:
+        """The commit checked out in the working tree containing ``path``, or ``None`` (no repository or history)."""
+        ...
+
 
 @runtime_checkable
 class CompanionRecords(Protocol):
@@ -374,17 +378,27 @@ class CompanionRecords(Protocol):
     collection owned by one operator capability (overlays, approvals, policies
     and launchers today; snapshots and telemetry archives later), which
     defines and versions its records' format. A new capability adds a kind;
-    neither this port nor its adapters change. Kinds, keys and project names
-    are 1 to 128 characters of ASCII letters, digits, ``.``, ``_`` and ``-``,
-    starting with a letter or digit; any other name (including one with a
-    trailing newline) is refused with an ``OrchestrationError`` coded
-    ``invalid_arguments``.
+    neither this port nor its adapters change.
+
+    Kinds and project names are *names*: 1 to 128 characters of ASCII letters,
+    digits, ``.``, ``_`` and ``-``, starting with a letter or digit. A key is
+    one or more names separated by ``/``, so a capability can keep a tree of
+    records (archived telemetry bundles: ``<instance>/<bundle>/<file>``); empty
+    segments, ``.``/``..`` and other dot-led segments (``.git``), and leading
+    or trailing ``/`` are therefore refused. A key that is a record cannot also
+    be the prefix of another key, and a prefix is not itself a record. Any
+    refused kind, key or project name (including one with a trailing newline)
+    raises an ``OrchestrationError`` coded ``invalid_arguments``.
     """
 
     project: str | None
 
-    def keys(self, kind: str) -> list[str]:
-        """The keys present in ``kind``, sorted."""
+    def keys(self, kind: str, *, recursive: bool = False) -> list[str]:
+        """The keys present in ``kind``, sorted: single names only, or with ``recursive`` every key, ``/`` ones included.
+
+        Flat kinds (overlays, approvals, policies, launchers) list only their
+        own records, so a subdirectory someone keeps there is never read as one.
+        """
         ...
 
     def read(self, kind: str, key: str) -> bytes | None:
@@ -426,6 +440,13 @@ class Companion(Protocol):
 
     def remote(self) -> str | None:
         """Where the companion is published (a repository URL), or ``None``."""
+        ...
+
+    def revision(self) -> str | None:
+        """The committed revision the companion's content is at (a git commit), or ``None`` when unversioned.
+
+        Uncommitted records are not part of it; the operator layer never commits for the user.
+        """
         ...
 
 

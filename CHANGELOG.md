@@ -26,6 +26,10 @@ The date is set when the release is tagged.
   `DeliveryScheduling`, `DeliveryRetry`, `ReceiptPolicy`, `VersionControl`,
   `WorktreeLocation`, `Companion`, `CompanionRecords`, `RepositoryHosting` and
   `HostingVisibility`.
+  Companion record keys may be `/`-separated paths of names
+  (`CompanionRecords.keys(kind, recursive=...)`), and `Companion.revision()` and
+  `VersionControl.revision(path)` report committed revisions, as in
+  Xorchestrate's master.
 - The values and errors they exchange, moved from `xorchestrate.model`: `JSON`,
   `Record`, `Capability`, `Assessment`, `Verdict`, `OrchestrationError` and
   `Conflict`.
@@ -33,7 +37,8 @@ The date is set when the release is tagged.
   (`SelectionSpec`), `AdapterFactory`, `CompanionFactory`, the selectable `KINDS` and
   `split_reference`.
 - The conformance kit (`xcontracts.testing`): `StateStore` checks (serialized
-  and optimistic stores alike), operator port checks, factory construction
+  and optimistic stores alike), operator port checks (path keys, flat and
+  recursive listing, prefix conflicts, revisions), factory construction
   checks and reference fakes. Every check has a fault witness.
 
 ### Compatibility

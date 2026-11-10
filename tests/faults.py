@@ -266,7 +266,7 @@ class NewlineNameCompanion(fakes.MemoryCompanion):
             if not isinstance(value, str) or not loose.match(value):
                 raise OrchestrationError("Invalid name.", "invalid_arguments")
             return value
-        records.read = lambda kind, key: store.get((records.project, name(kind), name(key)))
+        records.read = lambda kind, key: store.get((records.project, name(kind), fakes._key(key)))
         return records
 
 
@@ -328,3 +328,73 @@ class SnapshotIsolationStore:
             if self._open:
                 raise RuntimeError("Cannot close a state store inside a transaction.")
             self._closed = True
+
+
+class FlatListingCompanion(fakes.MemoryCompanion):
+    """Lists nested keys even without ``recursive``."""
+
+    def records(self, project):
+        records = super().records(project)
+        original = records.keys
+        records.keys = lambda kind, *, recursive=False: original(kind, recursive=True)
+        return records
+
+
+class PrefixConflictCompanion(fakes.MemoryCompanion):
+    """Lets a record also be the prefix of another key."""
+
+    def records(self, project):
+        records = super().records(project)
+        store = records.store
+
+        def write(kind, key, data, *, create_only=False):
+            address = (records.project, fakes._name(kind, "kind"), fakes._key(key))
+            if create_only and address in store:
+                return False
+            store[address] = bytes(data)
+            return True
+        records.write = write
+        return records
+
+
+class SingleNameKeyCompanion(fakes.MemoryCompanion):
+    """Keeps the old rule that a key is a single name."""
+
+    def records(self, project):
+        records = super().records(project)
+        original = records.write
+
+        def write(kind, key, data, *, create_only=False):
+            fakes._name(key, "key")
+            return original(kind, key, data, create_only=create_only)
+        records.write = write
+        return records
+
+
+class EmptySegmentCompanion(fakes.MemoryCompanion):
+    """Drops empty segments (``a//b`` becomes ``a/b``) instead of refusing the key."""
+
+    def records(self, project):
+        records = super().records(project)
+        original_read, original_write = records.read, records.write
+
+        def tidy(key):
+            return "/".join(part for part in key.split("/") if part) if isinstance(key, str) and key.strip("/") else key
+        records.read = lambda kind, key: original_read(kind, tidy(key))
+        records.write = lambda kind, key, data, *, create_only=False: original_write(kind, tidy(key), data,
+                                                                                     create_only=create_only)
+        return records
+
+
+class HeadlessVersionControl(fakes.FakeVersionControl):
+    """Reports no revision even for a repository with history."""
+
+    def revision(self, path):
+        return None
+
+
+class LeakyRevisionVersionControl(fakes.FakeVersionControl):
+    """Reports a revision for any path, even outside every repository."""
+
+    def revision(self, path):
+        return super().revision(path) or "abc"

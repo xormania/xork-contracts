@@ -113,7 +113,7 @@ def test_companion_checks_detect_overwriting_and_permissive_names():
 
 
 def test_version_control_check_detects_split_common_directories():
-    options = {"repositories": {"repo": {"worktrees": ["/w/repo", "/w/linked"], "roots": ["abc"]}}}
+    options = {"repositories": {"repo": {"worktrees": ["/w/repo", "/w/linked"], "roots": ["abc"], "head": "abc"}}}
     with pytest.raises(ContractViolation) as caught:
         operator.version_control(faults.SplitVersionControl(options), "/w/repo", "/w/linked", "/w/elsewhere")
     assert caught.value.code == "VCS_WORKTREES_SHARE_COMMON_DIR"
@@ -149,3 +149,27 @@ def test_checks_still_fail_under_optimized_python():
     completed = subprocess.run([sys.executable, "-O", "-c", script], cwd=ROOT, capture_output=True, text=True,
                                timeout=60, check=True)
     assert completed.stdout.split() == ["False", "STORE_STALE_REPLACEMENT_CONFLICTS"]
+
+
+@pytest.mark.parametrize(("companion", "code"), [
+    (faults.FlatListingCompanion, "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES"),
+    (faults.PrefixConflictCompanion, "COMPANION_REFUSES_PREFIX_CONFLICT"),
+    (faults.SingleNameKeyCompanion, "COMPANION_KEYS_MAY_BE_PATHS"),
+    (faults.EmptySegmentCompanion, "COMPANION_REFUSES_INVALID_KEY"),
+], ids=lambda value: getattr(value, "__name__", str(value)))
+def test_companion_path_key_checks_detect_their_fault(companion, code):
+    with pytest.raises(ContractViolation) as caught:
+        operator.companion_records(companion())
+    assert caught.value.code == code
+    operator.companion_records(fakes.MemoryCompanion())  # healthy control
+
+
+@pytest.mark.parametrize(("vcs", "code"), [
+    (faults.HeadlessVersionControl, "VCS_REVISION_OF_REPOSITORY_WITH_HISTORY"),
+    (faults.LeakyRevisionVersionControl, "VCS_NO_REVISION_OUTSIDE_REPOSITORY"),
+], ids=lambda value: getattr(value, "__name__", str(value)))
+def test_version_control_revision_checks_detect_their_fault(vcs, code):
+    options = {"repositories": {"repo": {"worktrees": ["/w/repo", "/w/linked"], "roots": ["abc"], "head": "abc"}}}
+    with pytest.raises(ContractViolation) as caught:
+        operator.version_control(vcs(options), "/w/repo", "/w/linked", "/w/elsewhere")
+    assert caught.value.code == code

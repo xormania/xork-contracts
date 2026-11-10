@@ -71,7 +71,7 @@ def test_every_port_is_selectable_through_a_kind_or_deliberately_not():
 def test_port_members_follow_inheritance():
     assert factory.port_members(ports.ResumableSessionDriver) == {"start", "send", "poll", "stop", "close", "resume"}
     assert factory.port_members(ports.Companion) == {"location", "validate_location", "exists", "initialize", "records",
-                                                     "remote"}
+                                                     "remote", "revision"}
 
 
 def test_reference_splitting_follows_the_first_separator():
