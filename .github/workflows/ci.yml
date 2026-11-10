@@ -1,0 +1,62 @@
+{
+  "name": "CI",
+  "on": {
+    "pull_request": {},
+    "push": {
+      "branches": [
+        "master"
+      ]
+    },
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "ci-${{ github.ref }}",
+    "cancel-in-progress": true
+  },
+  "jobs": {
+    "checks": {
+      "name": "Lint, tests and package (Python 3.12)",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 10,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Configure private environment",
+          "run": "printf 'UV_PROJECT_ENVIRONMENT=%s\\nPYTHONPYCACHEPREFIX=%s\\n' \"$RUNNER_TEMP/xcontracts-env\" \"$RUNNER_TEMP/xcontracts-pycache\" >> \"$GITHUB_ENV\""
+        },
+        {
+          "name": "Install pinned uv",
+          "uses": "astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9",
+          "with": {
+            "version": "0.13.7",
+            "enable-cache": false
+          }
+        },
+        {
+          "name": "Install locked tools",
+          "run": "uv sync --locked --managed-python --python 3.12.16"
+        },
+        {
+          "name": "Ruff",
+          "run": "uv run --no-sync ruff check --no-cache ."
+        },
+        {
+          "name": "Tests, including the conformance kit against the reference fakes",
+          "run": "uv run --no-sync python -m pytest -p no:cacheprovider"
+        },
+        {
+          "name": "Build and check the distributions (release identity dry run)",
+          "run": "uv run --no-sync python -m build --no-isolation --outdir \"$RUNNER_TEMP/dist\" .\nuv run --no-sync python -I -B scripts/release_identity.py --dist \"$RUNNER_TEMP/dist\""
+        }
+      ]
+    }
+  }
+}
