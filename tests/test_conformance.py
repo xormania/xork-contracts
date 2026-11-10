@@ -55,3 +55,29 @@ def test_version_control_roots_compare_after_resolving_symlinks(tmp_path):
             return vcs.revision(os.path.realpath(path))
     alias = tmp_path / "alias"
     operator.version_control(Resolving(), alias / "repo", alias / "linked", tmp_path)
+
+
+def test_hosting_may_omit_the_repository_name():
+    """``HostingVisibility.repository`` is optional, so an adapter that does not name it conforms."""
+    from xcontracts.ports import HostingVisibility
+
+    class Unnamed:
+        def visibility(self, remote_url):
+            answer = {PRIVATE: "private", PUBLIC: "public"}.get(remote_url)
+            return HostingVisibility(answer) if answer else HostingVisibility("unknown", reason="no answer")
+    operator.repository_hosting(Unnamed(), PRIVATE, PUBLIC, ["https://example.test/owner/missing"])
+
+
+def test_fake_version_control_resolves_the_innermost_worktree():
+    vcs = fakes.FakeVersionControl({"repositories": {
+        "outer": {"worktrees": ["/repo", "/repo/linked"], "roots": ["outer-root"], "head": "outer-head",
+                  "remotes": {"origin": "outer-url"}},
+        "nested": {"worktrees": ["/repo/vendor/lib"], "roots": ["nested-root"], "head": "nested-head",
+                   "remotes": {"origin": "nested-url"}}}})
+    linked = vcs.worktree("/repo/linked/src/file.py")
+    assert linked.root == "/repo/linked" and linked.private_dir == "/fake/outer/.git/worktrees/1"
+    assert vcs.worktree("/repo/src").root == "/repo"
+    assert vcs.worktree("/repo/vendor/lib/x.py").root == "/repo/vendor/lib"
+    assert vcs.root_commits("/repo/vendor/lib/x.py") == frozenset({"nested-root"})
+    assert vcs.remote_url("/repo/vendor/lib") == "nested-url" and vcs.revision("/repo/vendor/lib") == "nested-head"
+    assert vcs.revision("/repo/linked") == "outer-head" and vcs.root_commits("/repo") == frozenset({"outer-root"})

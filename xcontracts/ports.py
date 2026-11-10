@@ -347,7 +347,11 @@ class VersionControl(Protocol):
     """Local version-control queries and the few operations the operator layer performs."""
 
     def worktree(self, path: str) -> WorktreeLocation | None:
-        """The working tree containing ``path``, or ``None`` outside any repository."""
+        """The innermost working tree containing ``path``, or ``None`` outside any repository.
+
+        A linked worktree or a nested repository inside another working tree is
+        the one reported for paths within it.
+        """
         ...
 
     def root_commits(self, path: str) -> frozenset[str]:
@@ -452,7 +456,11 @@ class Companion(Protocol):
 
 @dataclass(frozen=True)
 class HostingVisibility:
-    """Whether a hosted repository is private: ``private``, ``public`` or ``unknown`` (with a reason)."""
+    """Whether a hosted repository is private: ``private``, ``public`` or ``unknown`` (with a reason).
+
+    ``repository`` names the hosted repository (for example ``owner/name``) when
+    the adapter knows it; it is optional and only reported, never relied on.
+    """
 
     visibility: str
     repository: str | None = None

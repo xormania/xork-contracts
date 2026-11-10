@@ -125,11 +125,15 @@ def version_control(vcs: VersionControl, repository: str | PathLike, linked: str
 @check()
 def repository_hosting(hosting: RepositoryHosting, private_url: str, public_url: str,
                        unanswerable_urls: Iterable[str]) -> None:
-    """Known repositories report ``private``/``public`` with a name; anything else is ``unknown`` with a reason."""
+    """Known repositories report ``private``/``public``; anything else is ``unknown`` with a reason.
+
+    Naming the repository (``HostingVisibility.repository``) is optional, as in the port.
+    """
     for url, expected in ((private_url, "private"), (public_url, "public")):
         report = hosting.visibility(url)
-        expect_equal(report.visibility, expected, f"HOSTING_REPORTS_VISIBILITY {url}")
-        expect(report.repository, "HOSTING_NAMES_THE_REPOSITORY", url)
+        if report.visibility != expected:
+            raise ContractViolation("HOSTING_REPORTS_VISIBILITY", f"{url}: observed {report.visibility!r}, "
+                                    f"expected {expected!r}")
     for url in unanswerable_urls:
         report = hosting.visibility(url)
         expect(report.visibility == "unknown" and report.reason, "HOSTING_UNANSWERABLE_IS_UNKNOWN_WITH_REASON",

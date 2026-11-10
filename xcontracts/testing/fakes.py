@@ -259,13 +259,20 @@ class FakeVersionControl:
         self.repositories = (options or {}).get("repositories", {})
 
     def _find(self, path: str) -> tuple[str, WorktreeLocation] | None:
+        """The innermost declared worktree containing ``path``, as git reports it.
+
+        A linked worktree inside the main one, or a nested repository, is more
+        specific than the tree around it.
+        """
+        found = None
         for name, repository in self.repositories.items():
             for index, root in enumerate(repository["worktrees"]):
-                if path == root or path.startswith(root.rstrip("/") + "/"):
+                if (path == root or path.startswith(root.rstrip("/") + "/")) and (
+                        found is None or len(root) > len(found[1].root)):
                     common = f"/fake/{name}/.git"
                     private = common if index == 0 else f"{common}/worktrees/{index}"
-                    return name, WorktreeLocation(root, private, common, repository.get("branch"))
-        return None
+                    found = name, WorktreeLocation(root, private, common, repository.get("branch"))
+        return found
 
     def worktree(self, path: str) -> WorktreeLocation | None:
         found = self._find(path)
