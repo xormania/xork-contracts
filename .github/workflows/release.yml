@@ -1,0 +1,212 @@
+{
+  "name": "Release",
+  "on": {
+    "push": {
+      "tags": [
+        "v*.*.*"
+      ]
+    },
+    "workflow_dispatch": {}
+  },
+  "permissions": {},
+  "concurrency": {
+    "group": "release-${{ github.ref }}",
+    "cancel-in-progress": false
+  },
+  "env": {
+    "PACKAGE_NAME": "xcontracts",
+    "RELEASE_BRANCH": "master",
+    "PYPI_UPLOAD_URL": "https://upload.pypi.org/legacy/",
+    "PYPI_PROJECT_URL": "https://pypi.org/project/",
+    "TESTPYPI_UPLOAD_URL": "https://test.pypi.org/legacy/",
+    "TESTPYPI_PROJECT_URL": "https://test.pypi.org/project/"
+  },
+  "jobs": {
+    "build": {
+      "name": "Build distributions and check release identity",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 10,
+      "permissions": {
+        "contents": "read"
+      },
+      "outputs": {
+        "tag": "${{ steps.identity.outputs.tag }}",
+        "prerelease": "${{ steps.identity.outputs.prerelease }}",
+        "upload_url": "${{ steps.index.outputs.upload_url }}",
+        "project_url": "${{ steps.index.outputs.project_url }}"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0
+          }
+        },
+        {
+          "name": "Configure private environment",
+          "run": "printf 'UV_PROJECT_ENVIRONMENT=%s\\nPYTHONPYCACHEPREFIX=%s\\n' \"$RUNNER_TEMP/xcontracts-env\" \"$RUNNER_TEMP/xcontracts-pycache\" >> \"$GITHUB_ENV\""
+        },
+        {
+          "name": "Install pinned uv",
+          "uses": "astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9",
+          "with": {
+            "version": "0.13.7",
+            "enable-cache": false
+          }
+        },
+        {
+          "name": "Install locked tools",
+          "run": "uv sync --locked --managed-python --python 3.12.16"
+        },
+        {
+          "name": "Build the wheel and source distribution",
+          "run": "\"$UV_PROJECT_ENVIRONMENT/bin/python\" -m build --no-isolation --outdir \"$RUNNER_TEMP/dist\" ."
+        },
+        {
+          "name": "Check release identity",
+          "id": "identity",
+          "shell": "bash",
+          "env": {
+            "EVENT_NAME": "${{ github.event_name }}",
+            "TAG": "${{ github.ref_name }}"
+          },
+          "run": "set -- --root . --dist \"$RUNNER_TEMP/dist\" --notes-output \"$RUNNER_TEMP/release-notes.md\" --github-output \"$GITHUB_OUTPUT\"\nif [ \"$EVENT_NAME\" = push ]; then\n  set -- \"$@\" --tag \"$TAG\" --annotated --ancestor-of \"refs/remotes/origin/$RELEASE_BRANCH\"\nfi\n\"$UV_PROJECT_ENVIRONMENT/bin/python\" -I -B scripts/release_identity.py \"$@\" | tee \"$RUNNER_TEMP/release-identity.json\""
+        },
+        {
+          "name": "Select package index",
+          "id": "index",
+          "env": {
+            "EVENT_NAME": "${{ github.event_name }}",
+            "VERSION": "${{ steps.identity.outputs.distribution_version }}"
+          },
+          "run": "if [ \"$EVENT_NAME\" = push ]; then\n  upload=\"$PYPI_UPLOAD_URL\" project=\"$PYPI_PROJECT_URL\"\nelse\n  upload=\"$TESTPYPI_UPLOAD_URL\" project=\"$TESTPYPI_PROJECT_URL\"\nfi\nprintf 'upload_url=%s\\nproject_url=%s%s/%s/\\n' \"$upload\" \"$project\" \"$PACKAGE_NAME\" \"$VERSION\" >> \"$GITHUB_OUTPUT\""
+        },
+        {
+          "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+          "with": {
+            "name": "distributions",
+            "path": "${{ runner.temp }}/dist/*",
+            "if-no-files-found": "error",
+            "retention-days": 30
+          }
+        },
+        {
+          "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+          "if": "always()",
+          "with": {
+            "name": "release-identity",
+            "path": "${{ runner.temp }}/release-identity.json\n${{ runner.temp }}/release-notes.md",
+            "if-no-files-found": "warn",
+            "retention-days": 30
+          }
+        }
+      ]
+    },
+    "check": {
+      "name": "Run the conformance kit from the built distributions",
+      "needs": [
+        "build"
+      ],
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 10,
+      "permissions": {
+        "contents": "read"
+      },
+      "steps": [
+        {
+          "name": "Install pinned uv",
+          "uses": "astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9",
+          "with": {
+            "version": "0.13.7",
+            "enable-cache": false
+          }
+        },
+        {
+          "uses": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+          "with": {
+            "name": "distributions",
+            "path": "${{ runner.temp }}/dist"
+          }
+        },
+        {
+          "name": "Install each distribution into a clean environment and run the kit against the fakes",
+          "working-directory": "${{ runner.temp }}",
+          "run": "for artifact in dist/*.whl dist/*.tar.gz; do\n  rm -rf consumer\n  uv venv --managed-python --python 3.12.16 consumer\n  uv pip install --python consumer/bin/python \"$artifact\"\n  consumer/bin/python -I -c 'import sys, xcontracts; from xcontracts.testing import fakes, run, state_store, operator; failed = [r for r in run(state_store.CHECKS, fakes.MemoryStateStore) if not r.passed]; operator.companion_records(fakes.MemoryCompanion()); assert \"pytest\" not in sys.modules; sys.exit(1 if failed else print(xcontracts.__version__, \"passed\"))'\ndone"
+        }
+      ]
+    },
+    "publish": {
+      "name": "Publish to ${{ github.event_name == 'push' && 'PyPI' || 'TestPyPI (dry run)' }}",
+      "needs": [
+        "build",
+        "check"
+      ],
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 10,
+      "environment": {
+        "name": "${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}",
+        "url": "${{ needs.build.outputs.project_url }}"
+      },
+      "permissions": {
+        "id-token": "write"
+      },
+      "steps": [
+        {
+          "uses": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+          "with": {
+            "name": "distributions",
+            "path": "dist"
+          }
+        },
+        {
+          "name": "Publish with trusted publishing",
+          "uses": "pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086",
+          "with": {
+            "packages-dir": "dist/",
+            "repository-url": "${{ needs.build.outputs.upload_url }}"
+          }
+        }
+      ]
+    },
+    "github-release": {
+      "name": "Attach distributions to the GitHub release",
+      "needs": [
+        "build",
+        "publish"
+      ],
+      "if": "${{ github.event_name == 'push' }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "permissions": {
+        "contents": "write"
+      },
+      "steps": [
+        {
+          "uses": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+          "with": {
+            "name": "distributions",
+            "path": "${{ runner.temp }}/dist"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+          "with": {
+            "name": "release-identity",
+            "path": "${{ runner.temp }}/identity"
+          }
+        },
+        {
+          "name": "Create or update the release for the tag",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}",
+            "GH_REPO": "${{ github.repository }}",
+            "TAG": "${{ needs.build.outputs.tag }}",
+            "PRERELEASE": "${{ needs.build.outputs.prerelease }}"
+          },
+          "run": "if gh release view \"$TAG\" >/dev/null 2>&1; then\n  gh release upload \"$TAG\" \"$RUNNER_TEMP\"/dist/* --clobber\nelse\n  set -- --verify-tag --title \"$TAG\" --notes-file \"$RUNNER_TEMP/identity/release-notes.md\"\n  if [ \"$PRERELEASE\" = true ]; then set -- \"$@\" --prerelease; fi\n  gh release create \"$TAG\" \"$RUNNER_TEMP\"/dist/* \"$@\"\nfi"
+        }
+      ]
+    }
+  }
+}

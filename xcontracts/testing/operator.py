@@ -1,0 +1,198 @@
+"""Conformance checks for the operator ports: ``Companion``, ``VersionControl`` and ``RepositoryHosting``.
+
+Each check receives a subject (a real adapter or a fake) and the inputs it
+needs, and states the port's contract from its documented behavior::
+
+    from xcontracts.testing import operator
+
+    operator.companion_records(MyCompanion({"path": str(tmp_path / "companion")}, version_control=vcs))
+    operator.version_control(MyVCS({}), repository, linked_worktree, unrelated_directory)
+    operator.repository_hosting(MyHosting({}), private_url, public_url, [unanswerable_url])
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Iterable
+from os import PathLike
+
+from ..ports import Companion, RepositoryHosting, VersionControl
+from ._core import ContractViolation, check, expect, expect_equal
+
+INVALID_NAMES = ("", ".hidden", "_private", "-dash", "../escape", "a/b", "spaced name", "key\n", "x" * 129)
+"""Kind and project names every companion must refuse with ``invalid_arguments``."""
+
+INVALID_KEYS = ("", ".hidden", ".git", "..", "../escape", "a/../b", "a//b", "/a", "a/", "a/.b", "a/.git/c",
+                "spaced name", "key\n", "a/b\n", "x" * 129)
+"""Keys every companion must refuse: keys are ``/``-separated names, so these are still invalid."""
+
+
+def _refused(call, name: str, code: str = "COMPANION_REFUSES_INVALID_NAME") -> None:
+    try:
+        call()
+    except Exception as error:  # noqa: BLE001 - any refusal with the right code satisfies the contract
+        if getattr(error, "code", None) != "invalid_arguments":
+            raise ContractViolation("COMPANION_INVALID_NAME_CODE",
+                                    f"{name!r} refused with {type(error).__name__} {error}") from error
+    else:
+        raise ContractViolation(code, f"{name!r} was accepted")
+
+
+@check()
+def companion_records(companion: Companion) -> None:
+    """Project-scoped, extensible records: kinds and keys, project isolation, atomic create-only.
+
+    ``companion`` must not exist yet; the check initializes it.
+    """
+    expect(companion.initialize() is not None, "COMPANION_INITIALIZE_REPORTS_CREATED")
+    expect(companion.exists(), "COMPANION_EXISTS_AFTER_INITIALIZE")
+    expect_equal(companion.initialize(), [], "COMPANION_INITIALIZE_NEVER_RECREATES")
+    alpha, beta, shared = companion.records("alpha"), companion.records("beta"), companion.records(None)
+    expect(alpha.project == "alpha" and shared.project is None, "COMPANION_RECORDS_NAME_THEIR_PROJECT")
+    expect(alpha.read("overlay", "overlay.json") is None, "COMPANION_ABSENT_RECORD_IS_NONE")
+    expect_equal(alpha.keys("overlay"), [], "COMPANION_EMPTY_KIND_HAS_NO_KEYS")
+    expect(alpha.write("overlay", "overlay.json", b'{"a": 1}') is True, "COMPANION_WRITE_REPORTS_WRITTEN")
+    expect_equal(alpha.read("overlay", "overlay.json"), b'{"a": 1}', "COMPANION_READS_WHAT_WAS_WRITTEN")
+    expect(beta.read("overlay", "overlay.json") is None, "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect(_absent_or_refused(lambda: shared.read("overlay", "overlay.json")),
+           "COMPANION_PROJECT_RECORDS_ARE_NOT_SHARED_RECORDS")
+    expect(alpha.write("overlay", "overlay.json", b"kept", create_only=True) is False,
+           "COMPANION_CREATE_ONLY_KEEPS_EXISTING")
+    expect_equal(alpha.read("overlay", "overlay.json"), b'{"a": 1}', "COMPANION_CREATE_ONLY_KEEPS_EXISTING")
+    expect(alpha.write("overlay", "overlay.json", b"replaced") is True, "COMPANION_WRITE_REPLACES")
+    expect_equal(alpha.read("overlay", "overlay.json"), b"replaced", "COMPANION_WRITE_REPLACES")
+    for key in ("b.json", "a.json"):
+        shared.write("policies", key, b"{}")
+    expect_equal(shared.keys("policies"), ["a.json", "b.json"], "COMPANION_KEYS_ARE_SORTED")
+    # A capability added later is just another kind: no port or adapter change.
+    expect(alpha.write("snapshot-archive", "bundle-1", b"\x00\x01") is True, "COMPANION_KINDS_ARE_OPEN")
+    expect_equal(alpha.keys("snapshot-archive"), ["bundle-1"], "COMPANION_KINDS_ARE_OPEN")
+    expect_equal(alpha.read("snapshot-archive", "bundle-1"), b"\x00\x01", "COMPANION_RECORDS_ARE_BYTES")
+    # Keys may be paths of names, so a capability can keep a tree of records.
+    tree = {"inst/bundle/manifest.json": b"{}", "inst/bundle/artifacts/sha256/ab/abcd": b"\x02",
+            "inst/other/manifest.json": b"[]"}
+    for key, data in tree.items():
+        try:
+            written = alpha.write("telemetry", key, data)
+        except Exception as error:  # noqa: BLE001 - a refused path key is the violation
+            raise ContractViolation("COMPANION_KEYS_MAY_BE_PATHS", f"{key!r}: {type(error).__name__} {error}") from error
+        expect(written is True, "COMPANION_KEYS_MAY_BE_PATHS", key)
+    expect_equal(alpha.keys("telemetry", recursive=True), sorted(tree), "COMPANION_RECURSIVE_KEYS_LIST_PATHS")
+    expect_equal(alpha.keys("telemetry"), [], "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES")
+    shared.write("launchers", "lib/helper.sh", b"#!/bin/sh\n")
+    expect_equal(shared.keys("launchers"), [], "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES")
+    expect_equal(shared.keys("launchers", recursive=True), ["lib/helper.sh"], "COMPANION_RECURSIVE_KEYS_LIST_PATHS")
+    shared.write("policies", "disabled/old.json", b"{}")
+    expect_equal(shared.keys("policies"), ["a.json", "b.json"], "COMPANION_FLAT_KEYS_ARE_SINGLE_NAMES")
+    expect_equal({key: alpha.read("telemetry", key) for key in tree}, tree, "COMPANION_KEYS_MAY_BE_PATHS")
+    expect_equal(beta.keys("telemetry", recursive=True), [], "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect(beta.read("telemetry", "inst/bundle/manifest.json") is None, "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect(alpha.read("telemetry", "inst/bundle") is None, "COMPANION_PREFIX_IS_NOT_A_RECORD")
+    for conflicting in ("inst/bundle/manifest.json/child", "inst/bundle"):
+        _refused(lambda key=conflicting: alpha.write("telemetry", key, b"x"), conflicting,
+                 "COMPANION_REFUSES_PREFIX_CONFLICT")
+    expect_equal(alpha.keys("telemetry", recursive=True), sorted(tree), "COMPANION_REFUSES_PREFIX_CONFLICT")
+    _refused(lambda: alpha.write("overlay", "text.json", "not bytes"), "str data", "COMPANION_RECORDS_ARE_BYTES_ONLY")
+    _refused(lambda: alpha.write("overlay", "list.json", [1]), "list data", "COMPANION_RECORDS_ARE_BYTES_ONLY")
+    expect(alpha.read("overlay", "text.json") is None, "COMPANION_RECORDS_ARE_BYTES_ONLY")
+    for name in INVALID_NAMES:
+        _refused(lambda name=name: alpha.read(name, "key"), name)
+        _refused(lambda name=name: alpha.write(name, "key", b"x"), name)
+        _refused(lambda name=name: companion.records(name or "/"), name)
+    for key in INVALID_KEYS:
+        _refused(lambda key=key: alpha.read("kind", key), key, "COMPANION_REFUSES_INVALID_KEY")
+        _refused(lambda key=key: alpha.write("kind", key, b"x"), key, "COMPANION_REFUSES_INVALID_KEY")
+
+
+def _absent_or_refused(call) -> bool:
+    """True when ``call`` finds nothing (``None`` or an empty list) or is refused with ``invalid_arguments``."""
+    try:
+        result = call()
+    except Exception as error:  # noqa: BLE001 - a refusal must carry the documented code
+        if getattr(error, "code", None) != "invalid_arguments":
+            raise ContractViolation("COMPANION_INVALID_NAME_CODE", f"refused with {type(error).__name__} {error}") from error
+        return True
+    return result is None or result == []
+
+
+@check()
+def companion_scopes_are_isolated(companion: Companion) -> None:
+    """Project-scoped and project-independent records never show through each other, whatever the keys look like.
+
+    A kind is used in one scope only; the other scope's use may be refused
+    (``invalid_arguments``) or isolated, but never sees or blocks the first
+    scope's records. ``companion`` must not exist yet; the check initializes it.
+    """
+    companion.initialize()
+    shared = companion.records(None)
+    # A project-independent tree whose first segment looks like a project name.
+    expect(shared.write("tools", "lib/helper.sh", b"shared") is True, "COMPANION_KEYS_MAY_BE_PATHS")
+    library = companion.records("lib")
+    expect(_absent_or_refused(lambda: library.read("tools", "helper.sh")), "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+    expect(_absent_or_refused(lambda: library.keys("tools", recursive=True)), "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+    expect(_absent_or_refused(lambda: library.keys("tools")), "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+    # Project-scoped trees are not project-independent records.
+    alpha, beta = companion.records("alpha"), companion.records("beta")
+    expect(alpha.write("archive", "inst/bundle/manifest.json", b"alpha") is True, "COMPANION_KEYS_MAY_BE_PATHS")
+    expect(_absent_or_refused(lambda: shared.keys("archive", recursive=True)), "COMPANION_PROJECT_RECORD_SEEN_AS_SHARED")
+    expect(_absent_or_refused(lambda: shared.keys("archive")), "COMPANION_PROJECT_RECORD_SEEN_AS_SHARED")
+    expect(_absent_or_refused(lambda: shared.read("archive", "alpha/inst/bundle/manifest.json")),
+           "COMPANION_PROJECT_RECORD_SEEN_AS_SHARED")
+    # A project-independent write cannot take or shadow a project's place.
+    try:
+        shared.write("archive", "beta", b"shared")
+    except Exception as error:  # noqa: BLE001 - refusing is allowed, with the documented code
+        if getattr(error, "code", None) != "invalid_arguments":
+            raise ContractViolation("COMPANION_INVALID_NAME_CODE", f"{type(error).__name__} {error}") from error
+    try:
+        written = beta.write("archive", "inst/bundle/manifest.json", b"beta")
+    except Exception as error:  # noqa: BLE001 - the project's own write must work
+        raise ContractViolation("COMPANION_SHARED_WRITE_BLOCKS_PROJECT", f"{type(error).__name__} {error}") from error
+    expect(written is True, "COMPANION_SHARED_WRITE_BLOCKS_PROJECT")
+    expect_equal(beta.read("archive", "inst/bundle/manifest.json"), b"beta", "COMPANION_SHARED_WRITE_BLOCKS_PROJECT")
+    expect_equal(alpha.read("archive", "inst/bundle/manifest.json"), b"alpha", "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect_equal(alpha.keys("archive", recursive=True), ["inst/bundle/manifest.json"], "COMPANION_PROJECTS_ARE_ISOLATED")
+    expect_equal(shared.read("tools", "lib/helper.sh"), b"shared", "COMPANION_SHARED_RECORD_SEEN_BY_PROJECT")
+
+
+@check()
+def version_control(vcs: VersionControl, repository: str | PathLike, linked: str | PathLike,
+                    unrelated_directory: str | PathLike) -> None:
+    """``repository`` and ``linked`` are two worktrees of one repository with history; ``unrelated_directory`` is in none.
+
+    The repository's checked-out commit is reported by ``revision``.
+    """
+    main, other = vcs.worktree(str(repository)), vcs.worktree(str(linked))
+    expect(main is not None and other is not None, "VCS_FINDS_WORKTREES")
+    expect_equal((os.path.realpath(main.root), os.path.realpath(other.root)),
+                 (os.path.realpath(repository), os.path.realpath(linked)), "VCS_WORKTREE_ROOTS")
+    expect(main.common_dir == other.common_dir, "VCS_WORKTREES_SHARE_COMMON_DIR")
+    expect(main.private_dir != other.private_dir, "VCS_WORKTREES_HAVE_PRIVATE_DIRS")
+    expect(vcs.worktree(str(unrelated_directory)) is None, "VCS_OUTSIDE_REPOSITORY_IS_NONE")
+    roots = vcs.root_commits(str(repository))
+    expect(roots and roots == vcs.root_commits(str(linked)), "VCS_WORKTREES_SHARE_ROOT_COMMITS")
+    expect_equal(vcs.root_commits(str(unrelated_directory)), frozenset(), "VCS_NO_ROOTS_OUTSIDE_REPOSITORY")
+    revision = vcs.revision(str(repository))
+    expect(isinstance(revision, str) and revision, "VCS_REVISION_OF_REPOSITORY_WITH_HISTORY", repr(revision))
+    expect(vcs.revision(str(unrelated_directory)) is None, "VCS_NO_REVISION_OUTSIDE_REPOSITORY")
+
+
+@check()
+def repository_hosting(hosting: RepositoryHosting, private_url: str, public_url: str,
+                       unanswerable_urls: Iterable[str]) -> None:
+    """Known repositories report ``private``/``public``; anything else is ``unknown`` with a reason.
+
+    Naming the repository (``HostingVisibility.repository``) is optional, as in the port.
+    """
+    for url, expected in ((private_url, "private"), (public_url, "public")):
+        report = hosting.visibility(url)
+        if report.visibility != expected:
+            raise ContractViolation("HOSTING_REPORTS_VISIBILITY", f"{url}: observed {report.visibility!r}, "
+                                    f"expected {expected!r}")
+    for url in unanswerable_urls:
+        report = hosting.visibility(url)
+        expect(report.visibility == "unknown" and report.reason, "HOSTING_UNANSWERABLE_IS_UNKNOWN_WITH_REASON",
+               f"{url}: {report!r}")
+
+
+CHECKS = (companion_records, companion_scopes_are_isolated, version_control, repository_hosting)

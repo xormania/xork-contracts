@@ -1,0 +1,14 @@
+target-version = "py312"
+line-length = 120
+
+[lint.isort]
+known-first-party = ["xcontracts"]
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "S"]
+
+[lint.per-file-ignores]
+# Tests may use assert and subprocess; the kit itself uses assert-free helpers.
+"tests/**" = ["S101", "S603", "S607"]
+# The release gate runs git on its own repository.
+"scripts/release_identity.py" = ["S603", "S607"]
