@@ -12,6 +12,9 @@ empty store, and closes what it creates. Run them all with pytest::
 
 or without pytest: ``xcontracts.testing.run(state_store.CHECKS, make_store)``.
 
+A check fails with ``ContractViolation``; an unexpected exception from the
+store is reported as ``UNEXPECTED_EXCEPTION`` naming the check.
+
 These checks state the port's documented behavior; persistence across
 restarts, multiple processes and storage formats are adapter-specific and stay
 with the adapter's own tests.
@@ -67,7 +70,7 @@ def create_replace_delete_and_stale_versions(make_store: MakeStore) -> None:
 @check()
 def inputs_and_returned_records_are_detached(make_store: MakeStore) -> None:
     """Changing a written value or a returned record never changes stored data."""
-    original = {"nested": [{"value": 1}], "unicode": "\ud800"}
+    original = {"nested": [{"value": 1}], "text": "caf\u00e9"}
     with _Store(make_store) as store:
         with store.transaction() as tx:
             created = tx.put("job", "one", original)
@@ -79,7 +82,7 @@ def inputs_and_returned_records_are_detached(make_store: MakeStore) -> None:
             listed = tx.list("job")
             listed[0].data["nested"][0]["value"] = 6
         with store.transaction() as tx:
-            expect_equal(tx.get("job", "one").data, {"nested": [{"value": 1}], "unicode": "\ud800"},
+            expect_equal(tx.get("job", "one").data, {"nested": [{"value": 1}], "text": "caf\u00e9"},
                          "STORE_RECORDS_ARE_DETACHED")
 
 
@@ -100,18 +103,21 @@ def exception_rolls_back_record_and_event_bundle(make_store: MakeStore) -> None:
     with _Store(make_store) as store:
         with store.transaction() as tx:
             original = tx.put("job", "one", {"phase": "initial"})
+            kept = tx.put("job", "kept", {"phase": "initial"})
             tx.emit({"phase": "initial"})
         for failure in (RuntimeError, KeyboardInterrupt):
             def fail(failure: type[BaseException] = failure) -> None:
                 with store.transaction() as tx:
                     tx.put("job", "one", {"phase": "changed"}, original.version)
                     tx.put("job", "two", {})
+                    tx.delete("job", "kept", kept.version)
                     tx.emit({"phase": "changed"})
                     raise failure()
             raises(failure, fail, "STORE_TRANSACTION_PROPAGATES_ITS_EXCEPTION")
             with store.transaction() as tx:
                 expect_equal(tx.get("job", "one"), original, "STORE_EXCEPTION_ROLLS_BACK_RECORDS")
                 expect(tx.get("job", "two") is None, "STORE_EXCEPTION_ROLLS_BACK_RECORDS")
+                expect_equal(tx.get("job", "kept"), kept, "STORE_EXCEPTION_ROLLS_BACK_DELETIONS")
                 expect_equal(tx.events(), [{"phase": "initial", "seq": 1}], "STORE_EXCEPTION_ROLLS_BACK_EVENTS")
         with store.transaction() as tx:
             tx.delete("job", "one", original.version)
@@ -127,15 +133,18 @@ def abort_discards_the_transaction_even_if_the_caller_catches(make_store: MakeSt
     with _Store(make_store) as store:
         with store.transaction() as tx:
             original = tx.put("job", "one", {"phase": "initial"})
+            kept = tx.put("job", "kept", {"phase": "initial"})
         try:
             with store.transaction() as tx:
                 tx.put("job", "one", {"phase": "changed"}, original.version)
+                tx.delete("job", "kept", kept.version)
                 tx.emit({"phase": "changed"})
                 tx.abort()
         except (OrchestrationError, RuntimeError):
             pass  # a store may report the aborted commit; it must not publish it
         with store.transaction() as tx:
             expect_equal(tx.get("job", "one"), original, "STORE_ABORT_DISCARDS_RECORDS")
+            expect_equal(tx.get("job", "kept"), kept, "STORE_ABORT_DISCARDS_DELETIONS")
             expect_equal(tx.events(), [], "STORE_ABORT_DISCARDS_EVENTS")
 
 
@@ -173,27 +182,33 @@ def invalid_json_rejected_without_partial_writes(make_store: MakeStore) -> None:
     with _Store(make_store) as store, store.transaction() as tx:
         for value in invalid:
             raises(OrchestrationError, lambda value=value: tx.put("job", "invalid", value),
-                   f"STORE_REFUSES_INVALID_RECORD_DATA {value!r}"[:120])
+                   "STORE_REFUSES_INVALID_RECORD_DATA", repr(value)[:80])
             raises(OrchestrationError, lambda value=value: tx.emit(value),
-                   f"STORE_REFUSES_INVALID_EVENT_DATA {value!r}"[:120])
+                   "STORE_REFUSES_INVALID_EVENT_DATA", repr(value)[:80])
         expect(tx.get("job", "invalid") is None, "STORE_INVALID_DATA_WRITES_NOTHING")
         expect_equal(tx.events(), [], "STORE_INVALID_DATA_WRITES_NOTHING")
 
 
 @check()
 def invalid_identifiers_versions_and_pagination(make_store: MakeStore) -> None:
-    """Empty, non-string or non-UTF-8-encodable keys, non-positive or non-int versions and negative cursors are refused."""
+    """Empty, non-string or non-UTF-8-encodable keys, versions that are not positive ints and bad cursors are refused.
+
+    ``bool`` is not an ``int`` here, for versions and for ``events`` arguments alike.
+    """
     with _Store(make_store) as store, store.transaction() as tx:
         for key in (None, "", 2, "\ud800"):
-            raises(OrchestrationError, lambda key=key: tx.put("job", key, {}), f"STORE_REFUSES_KEY {key!r}")
+            raises(OrchestrationError, lambda key=key: tx.put("job", key, {}), "STORE_REFUSES_KEY", repr(key))
+        # With the record at version 1, a version mistaken for 1 (``True``, ``"1"``) would succeed.
+        existing = tx.put("job", "one", {})
         for version in (True, 0, -1, 1.5, "1"):
             raises(OrchestrationError, lambda version=version: tx.put("job", "one", {}, version),
-                   f"STORE_REFUSES_VERSION {version!r}")
+                   "STORE_REFUSES_VERSION", repr(version))
             raises(OrchestrationError, lambda version=version: tx.delete("job", "one", version),
-                   f"STORE_REFUSES_VERSION {version!r}")
+                   "STORE_REFUSES_VERSION", repr(version))
+        expect_equal(tx.get("job", "one"), existing, "STORE_REFUSED_VERSION_WRITES_NOTHING")
         for after, limit in ((-1, 1), (1, -1), (True, 1), (1, 1.5)):
             raises(OrchestrationError, lambda after=after, limit=limit: tx.events(after, limit),
-                   f"STORE_REFUSES_EVENT_PAGE {(after, limit)!r}")
+                   "STORE_REFUSES_EVENT_PAGE", repr((after, limit)))
 
 
 @check()
@@ -215,7 +230,7 @@ def transaction_lifetime_thread_ownership_and_nesting(make_store: MakeStore) -> 
             ("put", lambda: tx.put("job", "two", {})), ("delete", lambda: tx.delete("job", "one", 1)),
             ("emit", lambda: tx.emit({})), ("events", lambda: tx.events()),
         ):
-            raises(RuntimeError, operation, f"STORE_TRANSACTION_UNUSABLE_AFTER_EXIT {name}")
+            raises(RuntimeError, operation, "STORE_TRANSACTION_UNUSABLE_AFTER_EXIT", name)
 
 
 @check()
@@ -233,7 +248,11 @@ def close_is_idempotent_and_prevents_reuse(make_store: MakeStore) -> None:
 
 @check()
 def concurrent_stale_snapshots_allow_exactly_one_winner(make_store: MakeStore) -> None:
-    """Two writers replacing the same version: one commits, the other conflicts and leaves no event."""
+    """Two writers replacing the same version: one commits, the other conflicts and leaves no event.
+
+    The loser's ``Conflict`` may come from its write or from leaving its
+    transaction (an optimistic store detecting the overlap at commit).
+    """
     with _Store(make_store) as store:
         with store.transaction() as tx:
             tx.put("job", "one", {"winner": None})
@@ -260,24 +279,47 @@ def concurrent_stale_snapshots_allow_exactly_one_winner(make_store: MakeStore) -
             expect_equal(tx.events(), [{"winner": winners[0], "seq": 1}], "STORE_CONFLICT_LEAVES_NO_EVENT")
 
 
+def retry(operation: Callable[[], object], attempts: int = 1000) -> object:
+    """Run ``operation``, repeating it while it fails with a retry-safe ``Conflict``."""
+    for _ in range(attempts - 1):
+        try:
+            return operation()
+        except Conflict as conflict:
+            if not conflict.details.get("retry_safe"):
+                raise ContractViolation("STORE_CONCURRENT_CONFLICT_IS_RETRY_SAFE",
+                                        "a transaction that read and wrote its own snapshot got a conflict that "
+                                        "is not retry-safe") from conflict
+    return operation()
+
+
+def _increment(store: StateStore) -> None:
+    with store.transaction() as tx:
+        previous = tx.get("counter", "one")
+        count = previous.data["count"] + 1
+        tx.put("counter", "one", {"count": count}, previous.version)
+        tx.emit({"count": count})
+
+
 @check()
 def concurrent_transactional_updates_keep_events_consistent(make_store: MakeStore) -> None:
-    """Serialized read-modify-write from several threads loses no update and keeps events in commit order."""
+    """Read-modify-write from several threads loses no update and keeps events in commit order.
+
+    A store may serialize transactions or reject the later of two overlapping
+    ones with a retry-safe ``Conflict``; the check repeats only those.
+    """
     with _Store(make_store) as store:
         with store.transaction() as tx:
             tx.put("counter", "one", {"count": 0})
 
         def increment(_: int) -> None:
             for _ in range(15):
-                with store.transaction() as tx:
-                    previous = tx.get("counter", "one")
-                    count = previous.data["count"] + 1
-                    tx.put("counter", "one", {"count": count}, previous.version)
-                    tx.emit({"count": count})
+                retry(lambda: _increment(store))
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             for future in [pool.submit(increment, index) for index in range(4)]:
                 error = future.exception(timeout=60)
+                if isinstance(error, ContractViolation):
+                    raise error
                 if error is not None:
                     raise ContractViolation("STORE_SERIALIZES_CONCURRENT_TRANSACTIONS",
                                             f"{type(error).__name__}: {error}") from error

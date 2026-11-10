@@ -19,7 +19,7 @@ The date is set when the release is tagged.
 ### Added
 
 - The public ports of Xorchestrate, moved from `xorchestrate.ports`:
-  `StateStore`/`Transaction`, `TelemetrySink` (provisional), `CapabilityProvider`,
+  `StateStore`/`Transaction`, `TelemetrySink` (provisional, not selectable), `CapabilityProvider`,
   `SessionDriver`, `ResumableSessionDriver`, `ApplicationToolSessionDriver`,
   `ApplicationToolCallback`, `Evaluator`, `Guardrail`, `AcceptancePolicy`,
   `RoutingPolicy`, `Clock`, `Identifier`, `SessionSelection`,
@@ -29,13 +29,14 @@ The date is set when the release is tagged.
 - The values and errors they exchange, moved from `xorchestrate.model`: `JSON`,
   `Record`, `Capability`, `Assessment`, `Verdict`, `OrchestrationError` and
   `Conflict`.
-- The adapter factory convention (`xcontracts.factories`): selection format,
-  `AdapterFactory`, `CompanionFactory`, the selectable `KINDS` and
+- The adapter factory convention (`xcontracts.factories`): selection format
+  (`SelectionSpec`), `AdapterFactory`, `CompanionFactory`, the selectable `KINDS` and
   `split_reference`.
-- The conformance kit (`xcontracts.testing`): `StateStore` checks, operator
-  port checks, factory construction checks and reference fakes.
+- The conformance kit (`xcontracts.testing`): `StateStore` checks (serialized
+  and optimistic stores alike), operator port checks, factory construction
+  checks and reference fakes. Every check has a fault witness.
 
 ### Compatibility
 
-- First release. `TelemetrySink` is provisional: its result shapes may be
-  narrowed in a later 0.x minor release.
+- First release. `TelemetrySink` is provisional: it passes host internals, is
+  not in `KINDS`, and will be narrowed in a later 0.x minor release.

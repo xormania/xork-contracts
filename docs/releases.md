@@ -21,8 +21,10 @@ The identity gate fails the run unless the tag is `vX.Y.Z` or `vX.Y.Z-rc.N`;
 equal it without the `v`; `pyproject.toml` declares `license = "Apache-2.0"`;
 `CHANGELOG.md` has a `## X.Y.Z` entry with a non-empty `### Compatibility`
 section; the build produced exactly one wheel and one sdist of that version, the
-wheel declaring `License-Expression: Apache-2.0` and shipping `LICENSE` and
-`py.typed`; and, for a tag push, the tag is annotated and on `master`. CI runs
+wheel declaring `License-Expression: Apache-2.0` and shipping `LICENSE`,
+`NOTICE` and `py.typed`, the sdist shipping `LICENSE` and `NOTICE` but no
+`tests/` or `scripts/` (excluded by `MANIFEST.in`, because the tests need the
+repository; run them from a checkout); and, for a tag push, the tag is annotated and on `master`. CI runs
 the same gate as a dry run (no tag) on every pull request.
 
 Only the publish job can request an OIDC token; no PyPI token is stored. Only

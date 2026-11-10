@@ -13,7 +13,7 @@ installed factory: ``"package.module:Name"``. The host imports
 ``package.module`` and reads its top-level attribute ``Name`` (the text after
 the first ``:``; dotted attribute paths are not followed). ``options`` is a JSON
 object, ``{}`` when omitted. ``enabled`` is a boolean; ``false`` leaves a named
-entry (of ``providers``, ``sessions`` or ``evaluators``) or the ``telemetry``
+entry (of ``providers``, ``sessions`` or ``evaluators``) or a ``telemetry``
 section unconstructed, while the other single-adapter sections are always
 constructed. Operator settings (``companion``, ``version_control``,
 ``repository_hosting``) take only ``adapter`` and ``options``.
@@ -38,15 +38,40 @@ Exceptions to that rule, exactly:
   built-in ``tool`` evaluator receives the constructed providers). A
   ``module:Name`` reference never receives them.
 
-Options reach a referenced factory exactly as written: the host resolves
-relative paths only for its own built-in aliases, so a factory that accepts
-paths should require absolute ones or document what they are relative to. A
-factory validates its own options and raises ``OrchestrationError`` (code
+Options are not passed through untouched. In Xorchestrate:
+
+- A project's configuration is rendered before composition. Every option
+  string has its placeholders ``${data}``, ``${home}``, ``${launchers}`` and
+  ``${instance}`` substituted (the project instance's data directory, the
+  account home directory, ``<data>/launchers`` and the instance id), and any
+  other ``${...}`` is refused. ``${repo}`` is allowed only in the
+  ``command``, ``discovery_command``, ``cwd`` and ``env`` options of
+  ``providers``, ``sessions`` and ``evaluators``, and is left unresolved:
+  the host's built-in process adapters resolve it per call to the caller's
+  worktree, while a referenced factory receives the literal ``${repo}``
+  text. Operator settings in the user's home are not rendered, and
+  ``build()`` called without the operator layer substitutes nothing.
+- For every ``providers`` and ``evaluators`` entry, referenced or built-in,
+  composition resolves ``options["cwd"]`` (default ``"."``) against the
+  project's data directory to identify the configuration, so a ``cwd`` that
+  is not a string is refused with ``configuration_error``. The factory still
+  receives ``cwd`` as written (or no ``cwd``); only built-in aliases receive
+  the resolved absolute path, and only built-in ``sqlite`` stores and the
+  built-in ``local`` telemetry get their paths resolved.
+
+So a factory that accepts paths should require absolute ones (``${data}``
+gives one) or document what they are relative to. A factory validates its own options and raises ``OrchestrationError`` (code
 ``configuration_error`` or ``invalid_request``) with a public message for
 invalid ones; any other exception is reported without its text.
 
 Xorchestrate closes each project adapter that has ``close()`` when its runtime
 ends, in reverse construction order.
+
+Telemetry
+---------
+Xorchestrate's ``telemetry`` section also accepts a reference, but
+``TelemetrySink`` is provisional and passes host internals, so ``telemetry``
+is not in ``KINDS``: a third-party collector is not supported yet.
 
 Host hooks
 ----------
@@ -70,7 +95,7 @@ AdapterT_co = TypeVar("AdapterT_co", covariant=True)
 SEPARATOR = ":"
 
 
-class AdapterSelection(TypedDict):
+class SelectionSpec(TypedDict):
     """``{"adapter": ..., "options": {...}, "enabled": ...}`` as written in configuration."""
 
     adapter: Required[str]
@@ -114,7 +139,6 @@ class AdapterKind:
 
 KINDS: dict[str, AdapterKind] = {kind.name: kind for kind in (
     AdapterKind("store", ports.StateStore, "project"),
-    AdapterKind("telemetry", ports.TelemetrySink, "project"),
     AdapterKind("providers", ports.CapabilityProvider, "project", named=True),
     AdapterKind("sessions", ports.SessionDriver, "project", named=True),
     AdapterKind("evaluators", ports.Evaluator, "project", named=True),
@@ -129,7 +153,7 @@ KINDS: dict[str, AdapterKind] = {kind.name: kind for kind in (
     AdapterKind("version_control", ports.VersionControl, "operator"),
     AdapterKind("repository_hosting", ports.RepositoryHosting, "operator"),
 )}
-"""Every kind a third-party factory may implement, by name."""
+"""Every kind a third-party factory may implement, by name. ``telemetry`` is deliberately absent."""
 
 
 def split_reference(reference: str) -> tuple[str, str]:

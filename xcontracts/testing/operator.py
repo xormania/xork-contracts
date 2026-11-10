@@ -12,13 +12,14 @@ needs, and states the port's contract from its documented behavior::
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from os import PathLike
 
 from ..ports import Companion, RepositoryHosting, VersionControl
 from ._core import ContractViolation, check, expect, expect_equal
 
-INVALID_NAMES = ("", ".hidden", "../escape", "a/b", "spaced name")
+INVALID_NAMES = ("", ".hidden", "_private", "-dash", "../escape", "a/b", "spaced name", "key\n", "x" * 129)
 """Kind, key and project names every companion must refuse with ``invalid_arguments``."""
 
 
@@ -74,7 +75,8 @@ def version_control(vcs: VersionControl, repository: str | PathLike, linked: str
     """``repository`` and ``linked`` are two worktrees of one repository with history; ``unrelated_directory`` is in none."""
     main, other = vcs.worktree(str(repository)), vcs.worktree(str(linked))
     expect(main is not None and other is not None, "VCS_FINDS_WORKTREES")
-    expect_equal((main.root, other.root), (str(repository), str(linked)), "VCS_WORKTREE_ROOTS")
+    expect_equal((os.path.realpath(main.root), os.path.realpath(other.root)),
+                 (os.path.realpath(repository), os.path.realpath(linked)), "VCS_WORKTREE_ROOTS")
     expect(main.common_dir == other.common_dir, "VCS_WORKTREES_SHARE_COMMON_DIR")
     expect(main.private_dir != other.private_dir, "VCS_WORKTREES_HAVE_PRIVATE_DIRS")
     expect(vcs.worktree(str(unrelated_directory)) is None, "VCS_OUTSIDE_REPOSITORY_IS_NONE")

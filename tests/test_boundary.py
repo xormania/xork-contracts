@@ -53,9 +53,11 @@ def test_every_public_name_resolves_and_the_version_matches_the_project():
     assert xcontracts.__version__ == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
 
 
-# Ports a host calls or passes in but never selects through configuration.
+# Ports a third party does not supply through a selectable kind.
 UNSELECTED = {"Transaction", "ResumableSessionDriver", "ApplicationToolSessionDriver", "ApplicationToolCallback",
-              "Clock", "CompanionRecords"}
+              "Clock", "CompanionRecords",
+              # Provisional: passes host internals, so third parties cannot implement it yet.
+              "TelemetrySink"}
 
 
 def test_every_port_is_selectable_through_a_kind_or_deliberately_not():

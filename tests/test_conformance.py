@@ -1,5 +1,7 @@
 """Healthy controls: the reference fakes pass every check of the kit."""
 
+import os
+
 import pytest
 
 from xcontracts.testing import fakes, operator, run, state_store
@@ -30,3 +32,22 @@ def test_fake_version_control_conforms():
 def test_fake_hosting_conforms():
     hosting = fakes.FakeHosting({"visibility": {PRIVATE: "private", PUBLIC: "public"}})
     operator.repository_hosting(hosting, PRIVATE, PUBLIC, ["https://example.test/owner/missing"])
+
+
+def test_version_control_roots_compare_after_resolving_symlinks(tmp_path):
+    """An adapter may report a worktree's resolved root; the check accepts it for a symlinked path."""
+    (tmp_path / "real" / "repo").mkdir(parents=True)
+    (tmp_path / "real" / "linked").mkdir()
+    (tmp_path / "alias").symlink_to(tmp_path / "real")
+    real = str((tmp_path / "real").resolve())
+    vcs = fakes.FakeVersionControl({"repositories": {"r": {"worktrees": [f"{real}/repo", f"{real}/linked"],
+                                                           "roots": ["abc"]}}})
+
+    class Resolving(fakes.FakeVersionControl):
+        def worktree(self, path):
+            return vcs.worktree(os.path.realpath(path))
+
+        def root_commits(self, path):
+            return vcs.root_commits(os.path.realpath(path))
+    alias = tmp_path / "alias"
+    operator.version_control(Resolving(), alias / "repo", alias / "linked", tmp_path)

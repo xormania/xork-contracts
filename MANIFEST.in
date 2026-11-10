@@ -1,0 +1,4 @@
+# The sdist carries the package, its metadata and license files only. The tests
+# need the repository (scripts/, tests/faults.py); run them from a checkout.
+prune tests
+prune scripts

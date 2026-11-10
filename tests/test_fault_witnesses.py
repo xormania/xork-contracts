@@ -11,12 +11,13 @@ from pathlib import Path
 import pytest
 
 from tests import faults
-from xcontracts.testing import ContractViolation, factory, fakes, operator, state_store
+from xcontracts.model import Conflict
+from xcontracts.testing import ContractViolation, factory, fakes, operator, run, state_store
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize(("store", "check", "code"), [
+WITNESSES = [
     (faults.BlindReplaceStore, state_store.create_replace_delete_and_stale_versions,
      "STORE_STALE_REPLACEMENT_CONFLICTS"),
     (faults.ConflictlessDeleteStore, state_store.create_replace_delete_and_stale_versions,
@@ -28,12 +29,78 @@ ROOT = Path(__file__).resolve().parents[1]
      "STORE_EXCEPTION_ROLLS_BACK_RECORDS"),
     (faults.UnserializedStore, state_store.concurrent_stale_snapshots_allow_exactly_one_winner,
      "STORE_CONCURRENT_REPLACEMENT_HAS_ONE_WINNER"),
-], ids=lambda value: getattr(value, "__name__", str(value)))
+    (faults.DeleteAppliedImmediatelyStore, state_store.exception_rolls_back_record_and_event_bundle,
+     "STORE_EXCEPTION_ROLLS_BACK_DELETIONS"),
+    (faults.DeleteAppliedImmediatelyStore, state_store.abort_discards_the_transaction_even_if_the_caller_catches,
+     "STORE_ABORT_DISCARDS_DELETIONS"),
+    (faults.UnsortedListStore, state_store.lists_are_sorted_and_scoped_to_kind, "STORE_LIST_SORTED_AND_SCOPED"),
+    (faults.CallerSequenceStore, state_store.events_are_detached_ordered_and_pageable,
+     "STORE_EVENTS_DETACHED_WITH_SEQ"),
+    (faults.TupleAcceptingStore, state_store.invalid_json_rejected_without_partial_writes,
+     "STORE_REFUSES_INVALID_RECORD_DATA"),
+    (faults.BooleanVersionStore, state_store.invalid_identifiers_versions_and_pagination, "STORE_REFUSES_VERSION"),
+    (faults.ReusableTransactionStore, state_store.transaction_lifetime_thread_ownership_and_nesting,
+     "STORE_TRANSACTION_UNUSABLE_AFTER_EXIT"),
+    (faults.ReopeningStore, state_store.close_is_idempotent_and_prevents_reuse, "STORE_CLOSED_REFUSES_TRANSACTIONS"),
+    (faults.LosingUpdatesStore, state_store.concurrent_transactional_updates_keep_events_consistent,
+     "STORE_SERIALIZES_CONCURRENT_TRANSACTIONS"),
+    (faults.FailingListStore, state_store.lists_are_sorted_and_scoped_to_kind, "UNEXPECTED_EXCEPTION"),
+]
+
+
+@pytest.mark.parametrize(("store", "check", "code"), WITNESSES, ids=lambda value: getattr(value, "__name__", str(value)))
 def test_state_store_checks_detect_their_fault(store, check, code):
     with pytest.raises(ContractViolation) as caught:
         check(store)
     assert caught.value.code == code
     check(fakes.MemoryStateStore)  # healthy control with the same inputs
+
+
+def test_every_state_store_check_has_a_fault_witness():
+    witnessed = {case[1].name for case in WITNESSES}
+    assert witnessed == {check.name for check in state_store.CHECKS}
+
+
+@pytest.mark.parametrize("check", state_store.CHECKS, ids=str)
+def test_an_optimistic_snapshot_isolation_store_passes(check):
+    """Healthy alternative: overlapping transactions with retry-safe conflicts at commit conform."""
+    store = faults.SnapshotIsolationStore
+    check(store)
+
+
+def test_the_optimistic_store_really_conflicts_and_the_kit_retries():
+    """Without retrying retry-safe conflicts, the concurrent check would fail against this store."""
+    conflicts = []
+
+    class Counting(faults.SnapshotIsolationStore):
+        def transaction(self):
+            context = super().transaction()
+
+            class Wrapped:
+                def __enter__(inner):
+                    return context.__enter__()
+
+                def __exit__(inner, *exc_info):
+                    try:
+                        return context.__exit__(*exc_info)
+                    except Conflict as conflict:
+                        conflicts.append(conflict.details.get("retry_safe"))
+                        raise
+            return Wrapped()
+    state_store.concurrent_transactional_updates_keep_events_consistent(Counting)
+    assert conflicts and all(conflicts)
+
+
+def test_run_reports_an_unexpected_adapter_error_as_a_named_violation():
+    result, = run([state_store.lists_are_sorted_and_scoped_to_kind], faults.FailingListStore)
+    assert (result.passed, result.code) == (False, "UNEXPECTED_EXCEPTION")
+    assert result.detail.startswith("lists_are_sorted_and_scoped_to_kind: KeyError")
+
+
+def test_companion_check_detects_a_trailing_newline_name():
+    with pytest.raises(ContractViolation) as caught:
+        operator.companion_records(faults.NewlineNameCompanion())
+    assert caught.value.code == "COMPANION_REFUSES_INVALID_NAME" and "key\\n" in caught.value.detail
 
 
 def test_companion_checks_detect_overwriting_and_permissive_names():

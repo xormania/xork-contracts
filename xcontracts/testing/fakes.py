@@ -164,11 +164,11 @@ class MemoryStateStore:
 
 # -- Companion ----------------------------------------------------------------------------
 
-NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def _name(value: object, what: str) -> str:
-    if not isinstance(value, str) or not NAME.match(value):
+    if not isinstance(value, str) or not NAME.fullmatch(value):
         raise OrchestrationError(f"Invalid companion record {what}.", "invalid_arguments", {what: value})
     return value
 

@@ -87,7 +87,8 @@ class Transaction(Protocol):
         """At most ``limit`` events with sequence greater than ``after``, in order.
 
         Each event carries its sequence as ``seq``, replacing any ``seq`` the
-        emitter supplied. ``after`` and ``limit`` are nonnegative ``int`` values.
+        emitter supplied. ``after`` and ``limit`` are nonnegative ``int`` values,
+        not ``bool``; anything else raises ``OrchestrationError``.
         """
         ...
 
@@ -96,9 +97,12 @@ class Transaction(Protocol):
 class StateStore(Protocol):
     """Durable or process-local application state with optimistic concurrency.
 
-    Concurrent transactions behave as if run one at a time: of two writers that
-    read the same version, exactly one replacement commits and the other gets
-    ``Conflict``. Opening a transaction inside another on the same store raises
+    Concurrent transactions behave as if run one at a time. A store may achieve
+    that by serializing them, or optimistically: when two overlapping
+    transactions conflict, the later one raises ``Conflict`` with
+    ``details["retry_safe"]`` true (from a write or when it leaves its context)
+    and publishes nothing, so repeating it is safe. Of two writers that read the
+    same version, exactly one replacement commits and the other gets ``Conflict``. Opening a transaction inside another on the same store raises
     ``RuntimeError``, as does ``close`` inside a transaction. ``close`` is
     idempotent and a closed store refuses new transactions with ``RuntimeError``.
     """
@@ -116,9 +120,13 @@ class TelemetrySink(Protocol):
     Bundle operations authorize every row of their complete closure through the
     supplied callback before returning a receipt.
 
-    This port is provisional in the 0.x series: its result shapes follow
-    Xorchestrate's built-in local collector and may be narrowed in a later minor
-    release (see the compatibility policy in the README).
+    This port is provisional and not yet implementable by third parties: the
+    host passes values that only its built-in collector understands (the
+    ``database_path`` and ``artifact_store`` that ``snapshot_source`` and
+    ``bundle_source`` describe), and its result shapes follow that collector.
+    It is published so hosts and tools can type against it; it is not a
+    selectable kind in ``xcontracts.factories.KINDS`` until it is narrowed in a
+    later minor release (see the compatibility policy in the README).
     """
 
     project_id: str | None
@@ -367,8 +375,9 @@ class CompanionRecords(Protocol):
     and launchers today; snapshots and telemetry archives later), which
     defines and versions its records' format. A new capability adds a kind;
     neither this port nor its adapters change. Kinds, keys and project names
-    are names of letters, digits, ``.``, ``_`` and ``-``, not starting with a
-    dot; any other name is refused with an ``OrchestrationError`` coded
+    are 1 to 128 characters of ASCII letters, digits, ``.``, ``_`` and ``-``,
+    starting with a letter or digit; any other name (including one with a
+    trailing newline) is refused with an ``OrchestrationError`` coded
     ``invalid_arguments``.
     """
 

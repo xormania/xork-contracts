@@ -1,8 +1,10 @@
 """The release identity gate and the release workflow's shape."""
 
+import io
 import json
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -25,15 +27,23 @@ def project(root, *, init="1.2.3", declared="1.2.3", license="Apache-2.0", chang
     return root
 
 
-def wheel(directory, version="1.2.3", *, metadata="License-Expression: Apache-2.0\n", license=True, typed=True):
+def wheel(directory, version="1.2.3", *, metadata="License-Expression: Apache-2.0\n", license=True, notice=True,
+          typed=True, sdist=("LICENSE", "NOTICE", "PKG-INFO", "xcontracts/__init__.py")):
     directory.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(directory / f"xcontracts-{version}-py3-none-any.whl", "w") as archive:
         archive.writestr(f"xcontracts-{version}.dist-info/METADATA", "Name: xcontracts\n" + metadata)
         if license:
             archive.writestr(f"xcontracts-{version}.dist-info/licenses/LICENSE", "Apache")
+        if notice:
+            archive.writestr(f"xcontracts-{version}.dist-info/licenses/NOTICE", "xormania")
         if typed:
             archive.writestr("xcontracts/py.typed", "")
-    (directory / f"xcontracts-{version}.tar.gz").write_bytes(b"")
+    with tarfile.open(directory / f"xcontracts-{version}.tar.gz", "w:gz") as archive:
+        for name in sdist:
+            data = b"content"
+            info = tarfile.TarInfo(f"xcontracts-{version}/{name}")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
     return directory
 
 
@@ -66,6 +76,10 @@ def test_disagreements_are_refused(tmp_path, keywords, tag, message):
     ({"metadata": "License: Apache\n"}, "Wheel metadata does not declare License-Expression: Apache-2.0"),
     ({"license": False}, "Wheel does not ship LICENSE"),
     ({"typed": False}, "Wheel does not ship py.typed"),
+    ({"notice": False}, "Wheel does not ship NOTICE"),
+    ({"sdist": ("LICENSE", "PKG-INFO")}, "Sdist does not ship NOTICE"),
+    ({"sdist": ("NOTICE", "PKG-INFO")}, "Sdist does not ship LICENSE"),
+    ({"sdist": ("LICENSE", "NOTICE", "tests/test_x.py")}, "Sdist ships ['tests']"),
     ({"version": "1.2.4"}, "do not carry xcontracts-1.2.3"),
 ])
 def test_distributions_must_carry_the_version_license_and_types(tmp_path, keywords, message):
@@ -114,3 +128,13 @@ def test_release_publishes_only_after_identity_and_installed_checks_with_trusted
     assert jobs["github-release"]["if"] == "${{ github.event_name == 'push' }}"
     assert any("release_identity.py" in step.get("run", "") and "--annotated" in step.get("run", "")
                for step in jobs["build"]["steps"])
+
+
+def test_the_built_distributions_pass_the_gate(tmp_path):
+    """The real build honors MANIFEST.in and ships the license files."""
+    completed = subprocess.run([sys.executable, "-m", "build", "--no-isolation", "--outdir", str(tmp_path), str(ROOT)],
+                               capture_output=True, text=True, timeout=300)
+    if completed.returncode != 0 and "No module named build" in completed.stderr:
+        pytest.skip("the build package is not installed")
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert release_identity.check(ROOT, distributions=tmp_path)[1] == []

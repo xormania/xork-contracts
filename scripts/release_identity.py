@@ -5,8 +5,9 @@ A release is an annotated tag ``vMAJOR.MINOR.PATCH`` (optionally ``-rc.N``) on
 ``pyproject.toml`` version to the tag without the ``v``. ``CHANGELOG.md`` has a
 ``## X.Y.Z`` entry with a non-empty ``### Compatibility`` section. Built
 distributions, when given, are exactly one wheel and one sdist carrying that
-version, and the wheel declares ``License-Expression: Apache-2.0`` and ships
-``LICENSE``. Without ``--tag`` (a dry run) the expected tag is ``v`` + ``__version__``.
+version. The wheel declares ``License-Expression: Apache-2.0`` and ships
+``LICENSE``, ``NOTICE`` and ``py.typed``; the sdist ships ``LICENSE`` and
+``NOTICE`` and, by choice (``MANIFEST.in``), no ``tests/`` or ``scripts/``. Without ``--tag`` (a dry run) the expected tag is ``v`` + ``__version__``.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import ast
 import json
 import re
 import subprocess
+import tarfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -93,10 +95,19 @@ def _check_distributions(directory, match, errors):
         text = archive.read(metadata[0]).decode("utf-8") if len(metadata) == 1 else ""
         if f"License-Expression: {LICENSE}" not in text.splitlines():
             errors.append(f"Wheel metadata does not declare License-Expression: {LICENSE}")
-        if not any(name.endswith(".dist-info/licenses/LICENSE") for name in names):
-            errors.append("Wheel does not ship LICENSE")
+        for required in ("LICENSE", "NOTICE"):
+            if not any(name.endswith(f".dist-info/licenses/{required}") for name in names):
+                errors.append(f"Wheel does not ship {required}")
         if f"{PACKAGE}/py.typed" not in names:
             errors.append("Wheel does not ship py.typed")
+    with tarfile.open(directory / sdists[0]) as archive:
+        members = [name.split("/", 1)[1] for name in archive.getnames() if "/" in name]
+    for required in ("LICENSE", "NOTICE"):
+        if required not in members:
+            errors.append(f"Sdist does not ship {required}")
+    excluded = sorted({name.split("/", 1)[0] for name in members if name.split("/", 1)[0] in {"tests", "scripts"}})
+    if excluded:
+        errors.append(f"Sdist ships {excluded}; MANIFEST.in excludes them because their tests need the repository")
     return files
 
 
