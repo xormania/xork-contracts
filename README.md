@@ -16,6 +16,7 @@ Python 3.12 or later. No dependencies beyond the standard library.
 | --- | --- |
 | `xcontracts.ports` | The ports, as `typing.Protocol` classes (runtime-checkable for member presence) |
 | `xcontracts.model` | Values and errors the ports exchange: `JSON`, `Record`, `Capability`, `Assessment`, `Verdict`, `OrchestrationError`, `Conflict` |
+| `xcontracts.contracts` | Python bindings for language-neutral, two-sided contract definitions; packaged schemas describe the shared format |
 | `xcontracts.factories` | How a host selects and constructs adapters: the `{"adapter": "module:Name", "options": {...}}` selection (`SelectionSpec`), `AdapterFactory`, `CompanionFactory` and the selectable `KINDS` |
 | `xcontracts.testing` | Conformance checks for adapter authors, and reference fakes that pass them |
 
@@ -23,12 +24,17 @@ The ports by purpose:
 
 | Purpose | Ports |
 | --- | --- |
+| Contract access | `ContractResolver`: obtain an exact agreement from a configured source; no host factory kind yet |
 | State and observation | `StateStore`, `Transaction`, `TelemetrySink` (provisional: published for typing, not yet implementable by third parties) |
 | Capabilities, sessions, judgment | `CapabilityProvider`, `SessionDriver`, `ResumableSessionDriver`, `ApplicationToolSessionDriver`, `ApplicationToolCallback`, `Evaluator`, `Guardrail`, `AcceptancePolicy` |
 | Routing and delivery | `RoutingPolicy`, `SessionSelection`, `DeliveryScheduling`, `DeliveryRetry`, `ReceiptPolicy`, `Clock`, `Identifier` |
 | Operator (project setup) | `VersionControl` (`WorktreeLocation`), `Companion`, `CompanionRecords`, `RepositoryHosting` (`HostingVisibility`) |
 
 ## Writing an adapter
+
+For the initial cross-language contract-access port, its two participant roles,
+and the distinction between a definition and conformance evidence, see
+[contract access](docs/contract-access.md).
 
 An adapter is a class or function that takes an options dict and returns
 something implementing one port. It does not need to inherit from the port:

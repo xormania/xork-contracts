@@ -10,8 +10,9 @@ not inherit from it. The ports are ``runtime_checkable`` so ``isinstance`` can
 check that the members exist; it does not check signatures or behavior. The
 conformance kit (``xcontracts.testing``) checks behavior.
 
-Ports fall into four groups:
+Ports fall into five groups:
 
+- contract access: ``ContractResolver``;
 - application state and observation: ``StateStore``/``Transaction`` and
   ``TelemetrySink``;
 - capabilities, sessions and judgment: ``CapabilityProvider``, the
@@ -32,7 +33,51 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from .contracts import ContractDefinition
 from .model import JSON, Assessment, Capability, Record, Verdict
+
+# -- contract access --------------------------------------------------------------
+
+
+@runtime_checkable
+class ContractResolver(Protocol):
+    """Read an exact agreement from a configured contract source.
+
+    ``resolve`` accepts nonempty string identities and versions and returns the
+    matching contract-definition v1 object, or ``None`` only when that exact
+    pair is known to be absent. Matching is exact: no normalization, aliases,
+    ranges, implicit latest version, or ordering. A published identity/version
+    denotes unchanged content within the configured source.
+
+    Definitions contain exactly two named roles and a nonempty list of nonempty
+    obligation strings for each role. Both sides may be implemented in any
+    language. Optional native artifacts carry a nonempty format and source text,
+    a declared purpose (definition, derived, or example), and an optional nonempty
+    selector. Artifact names are nonempty; an empty artifacts map is allowed.
+    All content and selectors are preserved without evaluation, conversion, or
+    default insertion. Unknown artifact formats are retained, not rejected;
+    support for a format's semantics belongs to a separate checker.
+    Every returned value is a deep detached JSON object; mutating it
+    cannot affect the source or later reads. See the packaged
+    ``schemas/contract-definition-v1.json`` and ``schemas/contract-resolver-v1.json``.
+
+    Expected failures raise ``OrchestrationError`` with ``invalid_arguments``
+    for an empty/non-string identity or version, ``contract_unavailable`` when
+    the source cannot answer, ``contract_denied`` when access is refused, or
+    ``contract_invalid`` for malformed/unsupported source definitions. None is
+    never a substitute for these failures. ``contract_resolver_closed`` refuses
+    reads after close; close is idempotent and releases this resolver's resources.
+
+    The caller selects its source and checks any required conformance evidence.
+    Resolving a description does not establish approval, compatibility, or that
+    either participant fulfills its obligations. Construction, transports and
+    implementations are independent of the description format.
+    """
+
+    def resolve(self, contract_id: str, version: str) -> ContractDefinition | None: ...
+
+    def close(self) -> None: ...
+
 
 # -- application state and observation --------------------------------------------
 

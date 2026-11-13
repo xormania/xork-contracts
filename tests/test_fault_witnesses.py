@@ -4,15 +4,16 @@ The healthy controls are in ``test_conformance.py``: the same checks pass
 against the unmodified fakes.
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from tests import faults
+from tests import contract_faults, faults
 from xcontracts.model import Conflict
-from xcontracts.testing import ContractViolation, factory, fakes, operator, run, state_store
+from xcontracts.testing import Check, ContractViolation, contracts, factory, fakes, operator, run, state_store
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -186,3 +187,96 @@ def test_companion_check_detects_non_bytes_records():
     with pytest.raises(ContractViolation) as caught:
         operator.companion_records(faults.TextAcceptingCompanion())
     assert caught.value.code == "COMPANION_RECORDS_ARE_BYTES_ONLY"
+
+
+CONTRACT_WITNESSES = [
+    (contract_faults.WrongVersionResolver, contracts.resolves_exact_definitions, "CONTRACT_EXACT_DEFINITION"),
+    (contract_faults.MissingAsEmptyResolver, contracts.resolves_exact_definitions, "CONTRACT_ABSENCE_IS_NONE"),
+    (contract_faults.DroppedArtifactsResolver, contracts.resolves_exact_definitions, "CONTRACT_EXACT_DEFINITION"),
+    (contract_faults.SharedDefinitionResolver, contracts.returns_detached_definitions, "CONTRACT_RESULTS_DETACHED"),
+    (contract_faults.ShallowDefinitionResolver, contracts.returns_detached_definitions, "CONTRACT_RESULTS_DETACHED"),
+    (contract_faults.InvalidReferenceMissingResolver, contracts.refuses_invalid_references,
+     "CONTRACT_INVALID_REFERENCE_REFUSED"),
+    (contract_faults.ReusableContractResolver, contracts.close_is_idempotent_and_prevents_reuse,
+     "CONTRACT_CLOSED_REFUSES_RESOLUTION"),
+]
+
+
+@pytest.mark.parametrize(("resolver", "check", "code"), CONTRACT_WITNESSES,
+                         ids=lambda value: getattr(value, "__name__", str(value)))
+def test_contract_checks_detect_their_fault(resolver, check, code):
+    with pytest.raises(ContractViolation) as caught:
+        check(resolver)
+    assert caught.value.code == code
+    check(fakes.MemoryContractResolver)
+
+
+def test_definition_check_detects_a_provider_that_drops_one_role():
+    example = contracts.sample_definitions()[0]
+    for resolver_type, defective in ((contract_faults.OneSidedResolver, True), (fakes.MemoryContractResolver, False)):
+        resolver = resolver_type([example])
+        try:
+            value = resolver.resolve(example["id"], example["version"])
+            if defective:
+                with pytest.raises(ContractViolation) as caught:
+                    contracts.definition_is_valid(value)
+                assert caught.value.code == "CONTRACT_DEFINITION_TWO_ROLES"
+            else:
+                contracts.definition_is_valid(value)
+        finally:
+            resolver.close()
+
+
+@pytest.mark.parametrize("failure", ["contract_unavailable", "contract_denied", "contract_invalid"])
+@pytest.mark.parametrize(("resolver", "code"), [
+    (contract_faults.FailureAsAbsenceResolver, "CONTRACT_FAILURE_IS_NOT_ABSENCE"),
+    (contract_faults.FailureAsSuccessResolver, "CONTRACT_FAILURE_IS_NOT_ABSENCE"),
+    (contract_faults.WrongFailureCodeResolver, "CONTRACT_FAILURE_CODE"),
+], ids=lambda value: getattr(value, "__name__", str(value)))
+def test_failure_check_refuses_false_absence_success_or_misclassification(failure, resolver, code):
+    with pytest.raises(ContractViolation) as caught:
+        contracts.failure_is_distinct(resolver(failure), "known.exchange", "draft-a", failure)
+    assert caught.value.code == code
+    contracts.failure_is_distinct(contract_faults.KnownFailureResolver(failure), "known.exchange", "draft-a", failure)
+
+
+def test_every_contract_check_has_a_fault_witness():
+    witnessed = {case[1].name for case in CONTRACT_WITNESSES}
+    assert witnessed == {check.name for check in contracts.CHECKS}
+    witnessed |= {contracts.definition_is_valid.name, contracts.failure_is_distinct.name}
+    assert witnessed == {value.name for value in vars(contracts).values() if isinstance(value, Check)}
+
+
+def test_contract_checks_still_detect_their_faults_under_optimized_python():
+    script = """
+import json
+from tests import contract_faults as faults
+from xcontracts.testing import contracts, fakes, run
+cases = [
+    (contracts.resolves_exact_definitions, faults.WrongVersionResolver),
+    (contracts.returns_detached_definitions, faults.SharedDefinitionResolver),
+    (contracts.refuses_invalid_references, faults.InvalidReferenceMissingResolver),
+    (contracts.close_is_idempotent_and_prevents_reuse, faults.ReusableContractResolver),
+]
+results = [run([check], resolver)[0] for check, resolver in cases]
+definition = contracts.sample_definitions()[0]
+definition['roles'].pop('requester')
+results += run([contracts.definition_is_valid], definition)
+results += run([contracts.failure_is_distinct], faults.FailureAsAbsenceResolver('contract_unavailable'),
+               'known.exchange', 'draft-a', 'contract_unavailable')
+healthy = run(contracts.CHECKS, fakes.MemoryContractResolver)
+healthy += run([contracts.definition_is_valid], contracts.sample_definitions()[0])
+healthy += run([contracts.failure_is_distinct], faults.KnownFailureResolver('contract_unavailable'),
+               'known.exchange', 'draft-a', 'contract_unavailable')
+print(json.dumps({'faults': [[item.passed, item.code] for item in results],
+                  'healthy': [item.passed for item in healthy]}))
+"""
+    completed = subprocess.run([sys.executable, "-O", "-c", script], cwd=ROOT, capture_output=True, text=True,
+                               timeout=60, check=True)
+    assert json.loads(completed.stdout) == {
+        "faults": [[False, code] for code in [
+            "CONTRACT_EXACT_DEFINITION", "CONTRACT_RESULTS_DETACHED", "CONTRACT_INVALID_REFERENCE_REFUSED",
+            "CONTRACT_CLOSED_REFUSES_RESOLUTION", "CONTRACT_DEFINITION_TWO_ROLES", "CONTRACT_FAILURE_IS_NOT_ABSENCE",
+        ]],
+        "healthy": [True] * 6,
+    }

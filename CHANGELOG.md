@@ -8,9 +8,20 @@ is deprecated, with the release in which it will be removed. See the
 
 ## Unreleased
 
+### Added
+
+- `ContractResolver`: exact, read-only access to a contract definition with two
+  named roles, independent of the participants' languages. Includes the shared
+  JSON schema and self-description, Python value bindings, reference fake and
+  conformance checks. Optional artifacts preserve native source (including CUE)
+  and its selected definition without evaluation or format conversion.
+  See [contract access](docs/contract-access.md).
+
 ### Compatibility
 
-- None yet.
+- Additive port for the next 0.2 compatibility series (the pre-1.0 policy gives
+  additions a minor bump). Existing interfaces and factory kinds are unchanged;
+  host configuration integration and consumer adoption are separate changes.
 
 ## 0.1.0
 

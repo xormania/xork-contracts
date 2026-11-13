@@ -41,11 +41,12 @@ def test_the_distribution_declares_no_dependencies():
 
 
 def test_importing_the_kit_does_not_import_pytest():
-    script = "import sys, xcontracts.testing.state_store, xcontracts.testing.operator, xcontracts.testing.fakes; " \
-             "print('pytest' in sys.modules)"
+    script = "import sys, xcontracts.testing.state_store, xcontracts.testing.operator, " \
+             "xcontracts.testing.contracts, xcontracts.testing.fakes; " \
+             "print('pytest' in sys.modules, 'jsonschema' in sys.modules)"
     completed = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=60,
                                check=True)
-    assert completed.stdout.strip() == "False"
+    assert completed.stdout.strip() == "False False"
 
 
 def test_every_public_name_resolves_and_the_version_matches_the_project():
@@ -55,7 +56,7 @@ def test_every_public_name_resolves_and_the_version_matches_the_project():
 
 # Ports a third party does not supply through a selectable kind.
 UNSELECTED = {"Transaction", "ResumableSessionDriver", "ApplicationToolSessionDriver", "ApplicationToolCallback",
-              "Clock", "CompanionRecords",
+              "Clock", "CompanionRecords", "ContractResolver",
               # Provisional: passes host internals, so third parties cannot implement it yet.
               "TelemetrySink"}
 

@@ -1,0 +1,27 @@
+{
+  "schema_version": "1",
+  "id": "xork.contracts.resolve",
+  "version": "1",
+  "roles": {
+    "requester": {
+      "obligations": [
+        "Select the contract source explicitly through the application's configured binding.",
+        "Supply a nonempty string contract_id and version, using exact opaque values rather than a version selector.",
+        "Interpret a missing result only as absence of that exact identity/version in the selected source.",
+        "Keep invalid_arguments, contract_unavailable, contract_denied, contract_invalid and contract_resolver_closed distinct from absence.",
+        "Do not treat a resolved definition as approval, compatibility evidence, or proof that either role conforms.",
+        "Release the resolver's owned resources when the binding is no longer needed."
+      ]
+    },
+    "resolver": {
+      "obligations": [
+        "Resolve contract_id and version exactly, without normalization, aliasing, version ordering, implicit latest selection, or fallback.",
+        "Return a detached JSON contract-definition v1 object whose id and version match the request, preserving both named roles, every obligation, and all optional native artifacts including their source text and selectors.",
+        "Preserve native artifact formats opaquely, including unknown formats; do not execute, convert, default, or claim conformance from their contents.",
+        "Keep published content unchanged for an identity/version within the selected source; caller mutation must never change source content or later results.",
+        "Return a missing result only for known absence; report invalid_arguments for empty or non-string identity/version, contract_unavailable for an unanswerable source, contract_denied for refused access, and contract_invalid for malformed or unsupported definitions.",
+        "Release owned resources on close, allow repeated close, and refuse subsequent resolution with contract_resolver_closed."
+      ]
+    }
+  }
+}

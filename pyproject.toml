@@ -23,13 +23,13 @@ Source = "https://github.com/xormania/xcontracts"
 Changelog = "https://github.com/xormania/xcontracts/blob/master/CHANGELOG.md"
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "ruff==0.16.8", "build>=1.2,<2", "setuptools>=77"]
+dev = ["pytest>=8,<10", "ruff==0.16.8", "build>=1.2,<2", "setuptools>=77", "jsonschema>=4.22,<5"]
 
 [tool.setuptools.packages.find]
 include = ["xcontracts*"]
 
 [tool.setuptools.package-data]
-xcontracts = ["py.typed"]
+xcontracts = ["py.typed", "schemas/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
