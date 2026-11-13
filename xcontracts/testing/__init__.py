@@ -4,6 +4,7 @@ Modules:
 
 - ``state_store``: ``StateStore``/``Transaction`` checks (``state_store.CHECKS``);
 - ``operator``: ``Companion``, ``VersionControl`` and ``RepositoryHosting`` checks;
+- ``contracts``: ``ContractResolver`` and language-neutral definition checks;
 - ``factory``: constructing an adapter through the factory convention and
   checking it has its port's members;
 - ``fakes``: reference implementations that pass the kit.

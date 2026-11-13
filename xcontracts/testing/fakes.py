@@ -2,8 +2,9 @@
 
 They pass the conformance kit (xcontracts' own CI runs it against them), so an
 adapter author can compare behavior, and a host's tests can use them in place
-of real infrastructure. Each takes an ``options`` dict and follows the factory
-convention, so it can be selected as ``xcontracts.testing.fakes:Name``.
+of real infrastructure. Selectable fakes take an ``options`` dict and follow the
+factory convention. ``MemoryContractResolver`` instead takes fixture definitions;
+its port does not yet have a selectable host kind.
 
 They are test doubles: process-local, unoptimized and with no durability.
 """
@@ -16,10 +17,48 @@ import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 
+from ..contracts import ContractDefinition
 from ..model import JSON, Conflict, OrchestrationError, Record
 from ..ports import HostingVisibility, VersionControl, WorktreeLocation
+from ._core import ContractViolation
+from .contracts import definition_is_valid
+
+
+class MemoryContractResolver:
+    """Snapshot of contract definitions for isolated conformance fixtures.
+
+    Takes a list of definitions rather than factory options: the ContractResolver
+    port has no selectable host kind yet. Identical duplicate definitions are
+    harmless; conflicting content for one identity/version is refused.
+    """
+
+    def __init__(self, definitions: list[ContractDefinition]):
+        self._definitions: dict[tuple[str, str], ContractDefinition] = {}
+        self._closed = False
+        if type(definitions) is not list:
+            raise OrchestrationError("Contract definitions must be a list.", "contract_invalid")
+        for definition in definitions:
+            try:
+                definition_is_valid(definition)
+            except ContractViolation as error:
+                raise OrchestrationError("Invalid contract definition.", "contract_invalid") from error
+            key = (definition["id"], definition["version"])
+            if key in self._definitions and self._definitions[key] != definition:
+                raise OrchestrationError("A contract identity/version has conflicting definitions.", "contract_invalid")
+            self._definitions[key] = deepcopy(definition)
+
+    def resolve(self, contract_id: str, version: str) -> ContractDefinition | None:
+        if self._closed:
+            raise OrchestrationError("The contract resolver is closed.", "contract_resolver_closed")
+        if any(type(value) is not str or not value for value in (contract_id, version)):
+            raise OrchestrationError("Contract identity and version must be nonempty strings.", "invalid_arguments")
+        return deepcopy(self._definitions.get((contract_id, version)))
+
+    def close(self) -> None:
+        self._closed = True
 
 # -- StateStore ---------------------------------------------------------------------------
 

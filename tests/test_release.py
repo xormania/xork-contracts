@@ -2,6 +2,7 @@
 
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -131,10 +132,58 @@ def test_release_publishes_only_after_identity_and_installed_checks_with_trusted
 
 
 def test_the_built_distributions_pass_the_gate(tmp_path):
-    """The real build honors MANIFEST.in and ships the license files."""
+    """Build and install the real wheel, including its language-neutral resources."""
     completed = subprocess.run([sys.executable, "-m", "build", "--no-isolation", "--outdir", str(tmp_path), str(ROOT)],
                                capture_output=True, text=True, timeout=300)
     if completed.returncode != 0 and "No module named build" in completed.stderr:
         pytest.skip("the build package is not installed")
     assert completed.returncode == 0, completed.stderr[-2000:]
     assert release_identity.check(ROOT, distributions=tmp_path)[1] == []
+
+    resources = ("contract-definition-v1.json", "contract-resolver-v1.json")
+    wheel_path, = tmp_path.glob("*.whl")
+    sdist_path, = tmp_path.glob("*.tar.gz")
+    with zipfile.ZipFile(wheel_path) as archive, tarfile.open(sdist_path) as source:
+        for name in resources:
+            expected = (ROOT / "xcontracts/schemas" / name).read_bytes()
+            assert archive.read(f"xcontracts/schemas/{name}") == expected
+            member, = [item for item in source.getmembers() if item.name.endswith(f"/xcontracts/schemas/{name}")]
+            assert source.extractfile(member).read() == expected
+
+    # A separate interpreter proves resources work through an installed package,
+    # with no checkout, pytest or schema-validator dependency on the import path.
+    consumer = tmp_path / "consumer"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(consumer)],
+                   capture_output=True, text=True, timeout=60, check=True)
+    executable = consumer / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    uv = shutil.which("uv")
+    assert uv is not None, "repository verification requires uv"
+    installed = subprocess.run([uv, "pip", "install", "--python", str(executable), "--offline", "--no-deps",
+                                str(wheel_path)], capture_output=True, text=True, timeout=60)
+    assert installed.returncode == 0, installed.stderr
+    script = """
+import json
+import sys
+from importlib.resources import files
+import xcontracts
+from xcontracts.testing import contracts, fakes, run
+names = ('contract-definition-v1.json', 'contract-resolver-v1.json')
+documents = {name: json.loads(files('xcontracts').joinpath('schemas', name).read_text()) for name in names}
+definition = documents['contract-resolver-v1.json']
+contracts.definition_is_valid(definition)
+resolver = fakes.MemoryContractResolver([definition])
+resolved = resolver.resolve(definition['id'], definition['version'])
+resolver.close()
+print(json.dumps({'origin': xcontracts.__file__, 'documents': documents, 'resolved': resolved,
+                  'checks': [result.passed for result in run(contracts.CHECKS, fakes.MemoryContractResolver)],
+                  'dev_imported': any(name in sys.modules for name in ('pytest', 'jsonschema'))}))
+"""
+    probe = subprocess.run([str(executable), "-I", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                           timeout=60, check=True)
+    actual = json.loads(probe.stdout)
+    assert Path(actual["origin"]).is_relative_to(consumer)
+    expected_documents = {name: json.loads((ROOT / "xcontracts/schemas" / name).read_text()) for name in resources}
+    assert actual["documents"] == expected_documents
+    assert actual["resolved"] == expected_documents["contract-resolver-v1.json"]
+    assert actual["checks"] == [True] * 4
+    assert actual["dev_imported"] is False

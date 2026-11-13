@@ -6,6 +6,7 @@ and ``xcontracts.testing`` the conformance kit. The names below are re-exported
 for convenience.
 """
 
+from .contracts import ContractArtifact, ContractDefinition, ContractRole
 from .factories import KINDS, AdapterFactory, AdapterKind, CompanionFactory, SelectionSpec, split_reference
 from .model import JSON, Assessment, Capability, Conflict, OrchestrationError, Record, Verdict
 from .ports import (
@@ -16,6 +17,7 @@ from .ports import (
     Clock,
     Companion,
     CompanionRecords,
+    ContractResolver,
     DeliveryRetry,
     DeliveryScheduling,
     Evaluator,
@@ -40,7 +42,9 @@ __version__ = "0.1.0"
 __all__ = [
     "JSON", "AcceptancePolicy", "AdapterFactory", "AdapterKind", "ApplicationToolCallback",
     "ApplicationToolSessionDriver", "Assessment", "Capability", "CapabilityProvider", "Clock", "Companion",
-    "CompanionFactory", "CompanionRecords", "Conflict", "DeliveryRetry", "DeliveryScheduling", "Evaluator",
+    "CompanionFactory", "CompanionRecords", "Conflict", "ContractArtifact", "ContractDefinition", "ContractResolver",
+    "ContractRole",
+    "DeliveryRetry", "DeliveryScheduling", "Evaluator",
     "Guardrail", "HostingVisibility", "Identifier", "KINDS", "OrchestrationError", "ReceiptPolicy", "Record",
     "RepositoryHosting", "ResumableSessionDriver", "RoutingPolicy", "SelectionSpec", "SessionDriver", "SessionSelection",
     "StateStore", "TelemetrySink", "Transaction", "Verdict", "VersionControl", "WorktreeLocation",
